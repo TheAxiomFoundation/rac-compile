@@ -32,6 +32,7 @@ dev = [
     "numpy>=1.24",
     "pandas>=1.5",
     "tqdm>=4.0",
+    "towncrier>=23.0",
 ]
 # PolicyEngine for external validation (heavy dependency, optional)
 validation = [
@@ -50,6 +51,33 @@ packages = ["src/rac_compile"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+
+[tool.towncrier]
+package = "rac_compile"
+package_dir = "src"
+directory = "changes"
+filename = "CHANGELOG.md"
+title_format = "{name} {version} ({project_date})"
+
+[[tool.towncrier.type]]
+directory = "feature"
+name = "New features"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "bugfix"
+name = "Bug fixes"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "doc"
+name = "Documentation"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "misc"
+name = "Misc"
+showcontent = true
 
 [tool.ruff]
 line-length = 88
