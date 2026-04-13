@@ -114,7 +114,7 @@ rac-compile lower examples/working_families/benefit_amount.rac --binding phase_i
 The lowered JSON includes:
 
 - public inputs
-- resolved parameters, each with source and `module_identity`
+- resolved external values, each with source and `module_identity`
 - ordered computations, each with `module_identity`
 - typed outputs, each with `module_identity`
 

@@ -14,7 +14,7 @@ It demonstrates:
 ## Files
 
 - `phase_in_rate.rac`: source-only external rule exported as `rate`
-- `phase_in_cap.rac`: inline scalar parameter exported as `cap`
+- `phase_in_cap.rac`: inline scalar rule exported as `cap`
 - `base_amount.rac`: imported helper variable exported as `base_amount`
 - `benefit_amount.rac`: entry file that re-exports `base_amount` and publishes
   `benefit_amount`

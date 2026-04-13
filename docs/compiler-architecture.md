@@ -17,7 +17,7 @@ maintaining a separate architecture description.
 flowchart LR
     A["Canonical .rac citation-path modules<br/>source metadata<br/>imports / exports / re-exports"] --> B["Parser<br/>RacFile"]
     B --> C["Program loader<br/>RacProgram<br/>module_identity graph"]
-    C --> D["Binding + resolution<br/>effective date<br/>parameter overrides<br/>module roots / packages"]
+    C --> D["Binding + resolution<br/>effective date<br/>rule bindings<br/>module roots / packages"]
     D --> E["Shared compile model<br/>CompiledModule"]
     E --> F["LoweredProgram<br/>typed ordered computations<br/>public outputs"]
 

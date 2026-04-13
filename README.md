@@ -15,7 +15,7 @@ pip install rac-compile
 ## Guides
 
 - `docs/compiler-architecture.md`: one-page architecture map, stability guide, and decision seams
-- `docs/authoring-rac.md`: how to write `.rac` files, parameters, variables, imports, exports, and temporal definitions
+- `docs/authoring-rac.md`: how to write `.rac` files, external value rules, computed rules, imports, exports, and temporal definitions
 - `docs/compile-and-lower.md`: CLI and Python API workflows for compile, lower, output selection, and rule binding
 - `docs/validation-and-oracles.md`: harness, validation modes, execution modes, and current oracle lanes
 
@@ -188,7 +188,7 @@ export default calculate;
 The generic `rac-compile compile` path now shares one parsed compile model for JavaScript, Python, and Rust.
 
 - Supported: straight-line formulas with assignments plus a final `return`
-- Supported: scalar expressions built from arithmetic, comparisons, boolean operators, ternaries, indexed parameter access, inline RAC conditionals like `if cond: a else: b`, and `abs` / `ceil` / `floor` / `max` / `min` / `round`
+- Supported: scalar expressions built from arithmetic, comparisons, boolean operators, ternaries, indexed lookup access, inline RAC conditionals like `if cond: a else: b`, and `abs` / `ceil` / `floor` / `max` / `min` / `round`
 - Supported: limited `if` / `elif` / `else` formula blocks when every reachable path returns a value
 - Supported: external numeric rule references discovered from parsed formulas, with free references exposed as calculator inputs
 - Supported: inline numeric external rule values from `.rac` `values:` blocks and single-entry temporal `.rac` source rules, with exact integer-vs-number kinds preserved in the lowered bundle
@@ -197,7 +197,7 @@ The generic `rac-compile compile` path now shares one parsed compile model for J
 - Supported: source-only external rules from a JSON `--binding-file`, with inline `--binding` flags overriding file values
 - Supported: explicit scalar-vs-indexed external lookup contracts in the lowered bundle, with bare rule references validated against resolved value shape
 - Supported: output-focused compilation via repeated `--select-output NAME`, pruning to the reachable variable subgraph for those outputs
-- Supported: lowered bundle emission via `rac-compile lower`, producing a serializable post-resolution artifact with explicit inputs, typed parameters, typed ordered computations, and typed public outputs
+- Supported: lowered bundle emission via `rac-compile lower`, producing a serializable post-resolution artifact with explicit inputs, typed external values, typed ordered computations, and typed public outputs
 - Supported: Rust output via `rac-compile compile ... --rust`, using the same lowered bundle as JS/Python for the validated numeric/boolean subset
 - Supported: local file imports written as `import "./shared.rac"` or `import "../common/base.rac"`, with graph-wide reachability pruning from the selected outputs
 - Supported: spec-style top-level or per-rule `imports:` blocks using `path#symbol` syntax, including root-qualified paths like `statute/...` and `regulation/...`

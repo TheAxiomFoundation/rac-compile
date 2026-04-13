@@ -56,7 +56,7 @@ The more representative policy examples are:
 RAC source files use one top-level rule shape. Some of those rules behave as
 external scalar values or lookup tables rather than computed formulas.
 
-Inline scalar parameter:
+Inline scalar external rule:
 
 ```rac
 rate:
@@ -65,7 +65,7 @@ rate:
     0: 0.2
 ```
 
-Indexed parameter table:
+Indexed external rule table:
 
 ```rac
 credit_pct:
@@ -138,7 +138,7 @@ The current compiler supports:
 - comparisons
 - boolean operators
 - ternaries like `cond ? a : b`
-- indexed parameter access like `threshold[n]`
+- indexed lookup access like `threshold[n]`
 - `abs`, `ceil`, `floor`, `max`, `min`, `round`
 - limited `if` / `elif` / `else` blocks when every reachable path returns
 
@@ -164,7 +164,7 @@ The compiler fails loudly on unsupported constructs instead of guessing.
 The source connection is part of the model, not optional decoration.
 
 - top-level `source:` describes the file-level authority or archive context
-- parameter `source:` fields tie values back to statutes, regulations, or guidance
+- external-rule `source:` fields tie values back to statutes, regulations, or guidance
 - variable labels and citations define the public rule surface
 
 If you are authoring real policy, prefer real `.rac` modules on disk over inline
@@ -220,7 +220,7 @@ Those are resolved through:
 
 ## Temporal definitions
 
-Both parameters and variables can have multiple dated entries:
+Both external rules and computed rules can have multiple dated entries:
 
 ```rac
 tax:
@@ -237,7 +237,7 @@ Compile these with `--effective-date YYYY-MM-DD`.
 
 ## Good current patterns
 
-- Use explicit `values:` blocks for inline numeric parameters.
+- Use explicit `values:` blocks for inline numeric external values.
 - Keep formulas straight-line when possible.
 - Use ternaries for simple expression-level branching.
 - Use statement `if` blocks only when branch-local assignments make them clearer.
