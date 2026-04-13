@@ -83,6 +83,7 @@ rac-compile lower examples/working_families/benefit_amount.rac --parameter phase
 rac-compile harness
 
 # Opt into curated compatibility checks against sibling live-stack RAC files
+# and AutoRAC artifacts
 rac-compile harness --include-live
 
 # Opt into external PolicyEngine-backed oracle checks (requires policyengine-us)
@@ -187,7 +188,7 @@ export default calculate;
 The generic `rac-compile compile` path now shares one parsed compile model for JavaScript, Python, and Rust.
 
 - Supported: straight-line formulas with assignments plus a final `return`
-- Supported: scalar expressions built from arithmetic, comparisons, boolean operators, ternaries, indexed parameter access, and `abs` / `ceil` / `floor` / `max` / `min` / `round`
+- Supported: scalar expressions built from arithmetic, comparisons, boolean operators, ternaries, indexed parameter access, inline RAC conditionals like `if cond: a else: b`, and `abs` / `ceil` / `floor` / `max` / `min` / `round`
 - Supported: limited `if` / `elif` / `else` formula blocks when every reachable path returns a value
 - Supported: parameter references discovered from parsed formulas, with free references exposed as calculator inputs
 - Supported: inline numeric parameter values from `.rac` `values:` blocks and single-entry temporal `.rac` parameters, with exact integer-vs-number kinds preserved in the lowered bundle
@@ -296,7 +297,7 @@ failing case first and then make it pass.
 - Use `rac-compile harness --json` for machine-readable output
 - Use repeated `--case NAME` to run a focused subset while developing a feature
 - The harness now also validates Rust when `rustc` is available locally
-- `rac-compile harness --include-live` opts into curated real-file compatibility checks against sibling repos such as `rac-us`
+- `rac-compile harness --include-live` opts into curated real-file compatibility checks against sibling repos such as `rac-us` and current AutoRAC artifacts
 - `rac-compile harness --include-external` opts into PolicyEngine-backed oracle cases when `policyengine-us` is installed
 
 ### Validation

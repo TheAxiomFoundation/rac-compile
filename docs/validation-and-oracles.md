@@ -25,8 +25,8 @@ The harness is the fast objective loop for compiler work. It checks:
 - batch execution
 - shipped example oracles
 
-Opt into curated live-stack compatibility checks against sibling repos such as
-`rac-us`:
+Opt into curated live-stack compatibility checks against sibling repos and
+artifacts such as `rac-us` and `autorac`:
 
 ```bash
 rac-compile harness --include-live

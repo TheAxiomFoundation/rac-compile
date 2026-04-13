@@ -133,6 +133,7 @@ class RacProgram:
 
         for rac_file in self.files:
             origin = _file_origin(rac_file, self.entrypoint)
+            computed_rule_names = {rule.name for rule in rac_file.computed_rules}
             module_exports[origin] = _build_module_exports(
                 rac_file=rac_file,
                 origin=origin,
@@ -180,7 +181,8 @@ class RacProgram:
                         qualified_bindings=variable_qualified_bindings,
                     )
                 )
-                output_variables.add(internal_name)
+                if variable.name in computed_rule_names:
+                    output_variables.add(internal_name)
 
         return merged, module_exports[self.entrypoint], output_variables
 

@@ -62,6 +62,121 @@ class TestRacProgram:
             "phase_in_rate",
         }
 
+    def test_load_rac_program_defaults_to_computed_outputs_only(self, tmp_path):
+        """Default public outputs should not include free inputs from source files."""
+        entry = tmp_path / "snap_child_support_deduction.rac"
+        entry.write_text(
+            """
+snap_child_support_payments_made:
+  entity: SnapUnit
+  period: Month
+  dtype: Money
+
+snap_state_uses_child_support_deduction:
+  entity: SnapUnit
+  period: Month
+  dtype: Boolean
+
+snap_child_support_deduction:
+  entity: SnapUnit
+  period: Month
+  dtype: Money
+  from 2022-01-01:
+    if snap_state_uses_child_support_deduction: snap_child_support_payments_made else: 0
+"""
+        )
+
+        program = load_rac_program(entry)
+        lowered = program.to_lowered_program()
+
+        assert program.default_outputs == ["snap_child_support_deduction"]
+        assert [output.name for output in lowered.outputs] == [
+            "snap_child_support_deduction"
+        ]
+        assert {compiled_input.name for compiled_input in lowered.inputs} == {
+            "snap_child_support_payments_made",
+            "snap_state_uses_child_support_deduction",
+        }
+
+    def test_load_rac_program_supports_inline_rac_conditional_expressions(
+        self, tmp_path
+    ):
+        """Inline `if cond: a else: b` RAC expressions compile without rewrites."""
+        entry = tmp_path / "snap_child_support_deduction.rac"
+        entry.write_text(
+            """
+snap_child_support_payments_made:
+  entity: SnapUnit
+  period: Month
+  dtype: Money
+
+snap_state_uses_child_support_deduction:
+  entity: SnapUnit
+  period: Month
+  dtype: Boolean
+
+snap_child_support_deduction:
+  entity: SnapUnit
+  period: Month
+  dtype: Money
+  from 2022-01-01:
+    if snap_state_uses_child_support_deduction: snap_child_support_payments_made else: 0
+"""
+        )
+
+        namespace = {}
+        code = load_rac_program(entry).to_python_generator().generate()
+
+        exec(code, namespace)
+
+        assert namespace["calculate"](
+            snap_child_support_payments_made=500,
+            snap_state_uses_child_support_deduction=True,
+        )["snap_child_support_deduction"] == 500
+        assert namespace["calculate"](
+            snap_child_support_payments_made=500,
+            snap_state_uses_child_support_deduction=False,
+        )["snap_child_support_deduction"] == 0
+
+    def test_load_rac_program_supports_chained_inline_rac_conditionals(
+        self, tmp_path
+    ):
+        """Chained inline RAC conditionals collapse into one compiled expression."""
+        entry = tmp_path / "need_standard.rac"
+        entry.write_text(
+            """
+number_of_children_in_assistance_unit:
+  entity: TanfUnit
+  period: Month
+  dtype: Integer
+
+need_standard:
+  entity: TanfUnit
+  period: Month
+  dtype: Money
+  from 2026-04-02:
+    if number_of_children_in_assistance_unit == 0: 0 else:
+    if number_of_children_in_assistance_unit == 1: 117 else:
+    if number_of_children_in_assistance_unit == 2: 245 else:
+    999
+"""
+        )
+
+        namespace = {}
+        code = load_rac_program(entry).to_python_generator().generate()
+
+        exec(code, namespace)
+
+        assert namespace["calculate"](number_of_children_in_assistance_unit=0)[
+            "need_standard"
+        ] == 0
+        assert namespace["calculate"](number_of_children_in_assistance_unit=2)[
+            "need_standard"
+        ] == 245
+        assert namespace["calculate"](number_of_children_in_assistance_unit=3)[
+            "need_standard"
+        ] == 999
+
     def test_load_rac_program_compiles_cross_file_dependencies(self, tmp_path):
         """Entry files can compile imported helper variables and parameters."""
         shared = tmp_path / "shared.rac"

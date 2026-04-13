@@ -865,8 +865,10 @@ def _wrap(rendered: str, precedence: int, parent_prec: int) -> str:
 def _normalize_formula_block(formula: str) -> str:
     """Normalize a RAC formula block into Python-like source for AST parsing."""
     normalized_lines: list[str] = []
-    for raw_line in formula.splitlines():
-        line = _strip_formula_comment(raw_line)
+    stripped_lines = [
+        _strip_formula_comment(raw_line) for raw_line in formula.splitlines()
+    ]
+    for line in _collapse_inline_if_formula_lines(stripped_lines):
         if not line.strip():
             normalized_lines.append("")
             continue
@@ -907,7 +909,90 @@ def _normalize_statement_line(line: str) -> str:
 
 def _normalize_expression(expression: str) -> str:
     """Convert RAC expression syntax into parseable Python syntax."""
-    return _rewrite_js_tokens(_convert_ternary(expression.strip()))
+    stripped = expression.strip()
+    return _rewrite_js_tokens(
+        _convert_ternary(_convert_inline_if_expression(stripped))
+    )
+
+
+def _collapse_inline_if_formula_lines(lines: list[str]) -> list[str]:
+    """Collapse chained inline RAC conditionals into one expression line."""
+    collapsed: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        stripped = line.strip()
+        if not stripped:
+            collapsed.append(line)
+            index += 1
+            continue
+
+        indent = line[: len(line) - len(line.lstrip())]
+        if not stripped.startswith("if "):
+            collapsed.append(line)
+            index += 1
+            continue
+
+        parts = [stripped]
+        next_index = index + 1
+        while _inline_if_expects_continuation(parts[-1]):
+            if next_index >= len(lines):
+                break
+            next_line = lines[next_index]
+            if not next_line.strip():
+                break
+            next_indent = next_line[: len(next_line) - len(next_line.lstrip())]
+            if next_indent != indent:
+                break
+            parts.append(next_line.strip())
+            next_index += 1
+
+        if len(parts) > 1:
+            collapsed.append(indent + " ".join(parts))
+            index = next_index
+            continue
+
+        collapsed.append(line)
+        index += 1
+    return collapsed
+
+
+def _inline_if_expects_continuation(expression: str) -> bool:
+    """Return whether an inline RAC conditional still needs its else branch."""
+    return expression.strip().startswith("if ") and expression.rstrip().endswith(
+        "else:"
+    )
+
+
+def _convert_inline_if_expression(expression: str) -> str:
+    """Convert `if cond: a else: b` RAC syntax into Python ternary syntax."""
+    stripped = expression.strip()
+    if not stripped.startswith("if "):
+        return expression
+
+    condition_colon = _find_top_level_colon(stripped, start_index=len("if "))
+    if condition_colon == -1:
+        return expression
+    else_marker = _find_top_level_else_marker(
+        stripped,
+        start_index=condition_colon + 1,
+    )
+    if else_marker == -1:
+        return expression
+
+    condition = stripped[len("if ") : condition_colon].strip()
+    if_true = stripped[condition_colon + 1 : else_marker].strip()
+    if_false = stripped[else_marker + len("else:") :].strip()
+    if not condition or not if_true or not if_false:
+        raise ExpressionParseError(
+            f"Malformed inline conditional expression: '{expression}'."
+        )
+
+    return (
+        f"({_convert_inline_if_expression(if_true)} if "
+        f"{_convert_inline_if_expression(condition)} else "
+        f"{_convert_inline_if_expression(if_false)})"
+    )
 
 
 def _rewrite_js_tokens(expression: str) -> str:
@@ -1034,6 +1119,54 @@ def _find_matching_colon(expression: str, question_index: int) -> int:
             if nested_ternaries == 0:
                 return index
             nested_ternaries -= 1
+        index += 1
+    return -1
+
+
+def _find_top_level_colon(expression: str, start_index: int = 0) -> int:
+    """Find a top-level ':' after the requested start index."""
+    depth = 0
+    index = start_index
+    while index < len(expression):
+        char = expression[index]
+        if char in {"'", '"'}:
+            _, index = _consume_string_literal(expression, index)
+            continue
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif char == ":" and depth == 0:
+            return index
+        index += 1
+    return -1
+
+
+def _find_top_level_else_marker(expression: str, start_index: int = 0) -> int:
+    """Find a top-level `else:` marker in an inline RAC conditional."""
+    depth = 0
+    index = start_index
+    while index < len(expression):
+        char = expression[index]
+        if char in {"'", '"'}:
+            _, index = _consume_string_literal(expression, index)
+            continue
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        elif (
+            depth == 0
+            and expression.startswith("else:", index)
+            and (
+                index == 0
+                or not (
+                    expression[index - 1].isalnum()
+                    or expression[index - 1] == "_"
+                )
+            )
+        ):
+            return index
         index += 1
     return -1
 

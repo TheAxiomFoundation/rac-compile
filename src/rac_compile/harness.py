@@ -640,6 +640,71 @@ tax:
         targets=(),
         live=True,
     ),
+    HarnessCase(
+        name="live_autorac_inline_conditional_support",
+        category="live_stack",
+        description=(
+            "Real AutoRAC source files should compile inline `if cond: a else: b` "
+            "expressions without requiring manual rewrites."
+        ),
+        workspace_entrypoint=(
+            "autorac/artifacts/eval-suites/"
+            "us-snap-child-support-deduction-refresh1-ready-20260412/"
+            "01-snap_child_support_deduction/openai-gpt-5.4/source/"
+            "snap_child_support_deduction.rac"
+        ),
+        outputs=["snap_child_support_deduction"],
+        inputs={
+            "snap_child_support_payments_made": 500,
+            "snap_state_uses_child_support_deduction": True,
+        },
+        expected_input_names=[
+            "snap_child_support_payments_made",
+            "snap_state_uses_child_support_deduction",
+        ],
+        expected_outputs={"snap_child_support_deduction": 500},
+        batch_inputs={
+            "snap_child_support_payments_made": [500, 500],
+            "snap_state_uses_child_support_deduction": [True, False],
+        },
+        expected_batch_outputs={"snap_child_support_deduction": [500, 0]},
+        live=True,
+    ),
+    HarnessCase(
+        name="live_autorac_source_import_resolution",
+        category="live_stack",
+        description=(
+            "Real AutoRAC source files should resolve citation imports through "
+            "their adjacent artifact context instead of surfacing imported helpers "
+            "as free inputs."
+        ),
+        workspace_entrypoint=(
+            "autorac/artifacts/eval-suites/"
+            "us-snap-net-income-pre-shelter-refresh2-revalidated-ready-20260412/"
+            "01-snap_net_income_pre_shelter/openai-gpt-5.4/source/"
+            "SNAP-pre-shelter-net-income-under-7-USC-2014-e-6-A.rac"
+        ),
+        outputs=["snap_net_income_pre_shelter"],
+        inputs={
+            "snap_gross_income": 1000,
+            "snap_standard_deduction": 100,
+            "snap_earned_income_deduction": 50,
+            "snap_dependent_care_deduction": 25,
+            "snap_child_support_deduction": 10,
+            "snap_excess_medical_expense_deduction": 5,
+        },
+        expected_input_names=[
+            "snap_standard_deduction",
+            "snap_earned_income_deduction",
+            "snap_dependent_care_deduction",
+            "snap_child_support_deduction",
+            "snap_excess_medical_expense_deduction",
+            "snap_gross_income",
+        ],
+        forbidden_input_names=["snap_other_applicable_deductions_before_shelter"],
+        expected_outputs={"snap_net_income_pre_shelter": 810},
+        live=True,
+    ),
 )
 
 
