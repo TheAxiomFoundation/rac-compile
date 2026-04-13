@@ -6,6 +6,8 @@ Each test class targets specific uncovered lines.
 
 from unittest.mock import patch
 
+import pytest
+
 # ============================================================
 # js_generator.py - missing lines: 128, 184-235, 315
 # ============================================================
@@ -202,11 +204,14 @@ class TestParserLine232:
 
         rac = """
 this is not a valid block
-also not valid { but has brace }
+still not a valid block
 
-variable x {
-  formula { return 0 }
-}
+x:
+  entity: Person
+  period: Year
+  dtype: Integer
+  from 2024-01-01:
+    return 0
 """
         result = parse_rac(rac)
         assert len(result.variables) == 1
@@ -239,12 +244,17 @@ class TestParserLine368:
         from src.rac_compile.parser import parse_rac
 
         rac = """
-source {
+source:
   # A comment
 
   citation: "Test Citation"
   accessed: 2025-01-01
-}
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return 0
 """
         result = parse_rac(rac)
         assert result.source.citation == "Test Citation"
@@ -254,35 +264,30 @@ class TestParserParameterEdgeCases:
     """Test parameter block edge cases."""
 
     def test_parameter_values_with_invalid_entries(self):
-        """Non-numeric keys/values in parameter values are skipped (ValueError)."""
-        from src.rac_compile.parser import parse_rac
+        """Malformed indexed parameter tables fail loudly."""
+        from src.rac_compile.parser import ParserError, parse_rac
 
         rac = """
-parameter test_param {
+test_param:
   source: "Test"
-  values {
+  values:
     0: 10
     bad_key: 20
     1: not_a_number
     2: 30
-  }
-}
 """
-        result = parse_rac(rac)
-        param = result.parameters["test_param"]
-        assert param.values == {0: 10.0, 2: 30.0}
+        with pytest.raises(ParserError, match="Invalid parameter values entry"):
+            parse_rac(rac)
 
     def test_parameter_source_no_quotes(self):
         """Parameter source without quotes is parsed."""
         from src.rac_compile.parser import parse_rac
 
         rac = """
-parameter test_param {
+test_param:
   source: some/path/to/source
-  values {
+  values:
     0: 10
-  }
-}
 """
         result = parse_rac(rac)
         assert result.parameters["test_param"].source == "some/path/to/source"
@@ -292,11 +297,9 @@ parameter test_param {
         from src.rac_compile.parser import parse_rac
 
         rac = """
-parameter test_param {
-  values {
+test_param:
+  values:
     0: 10
-  }
-}
 """
         result = parse_rac(rac)
         param = result.parameters["test_param"]

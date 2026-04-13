@@ -3,42 +3,272 @@ Command-line interface for rac-compile.
 
 Usage:
     rac-compile compile input.rac -o output.js
-    rac-compile compile input.cos -o output.js
+    rac-compile compile input.rac --python -o output.py
+    rac-compile compile input.rac --rust -o output.rs
     rac-compile eitc -o eitc.js
 """
 
 import argparse
+import re
 import sys
+from datetime import date
 from pathlib import Path
+from typing import Any
 
+from .compile_model import CompilationError
+from .harness import (
+    format_harness_summary,
+    format_harness_summary_json,
+    run_compiler_harness,
+)
 from .js_generator import generate_eitc_calculator
-from .parser import parse_rac
+from .parameter_bindings import (
+    ParameterBindingError,
+    load_parameter_overrides_file,
+    merge_parameter_overrides,
+)
+from .program import load_rac_program
 from .python_generator import generate_eitc_calculator as generate_eitc_calculator_py
+
+
+def _parse_effective_date(value: str) -> date:
+    """Parse an ISO date for temporal compilation."""
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"Invalid date '{value}'. Expected YYYY-MM-DD."
+        ) from exc
+
+
+def _parse_parameter_binding_name(name: str) -> str:
+    """Validate a parameter binding target name."""
+    if re.fullmatch(r"[A-Za-z_]\w*", name):
+        return name
+    if "." not in name:
+        raise argparse.ArgumentTypeError(
+            f"Invalid parameter binding target '{name}'."
+        )
+
+    module_identity, symbol = name.rsplit(".", 1)
+    if not module_identity or not re.fullmatch(r"[A-Za-z_]\w*", symbol):
+        raise argparse.ArgumentTypeError(
+            f"Invalid parameter binding target '{name}'."
+        )
+    return name
+
+
+def _parse_parameter_binding(value: str) -> tuple[str, int, float]:
+    """Parse NAME=VALUE, module_identity.symbol=VALUE, or indexed variants."""
+    try:
+        lhs, rhs = value.split("=", 1)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"Invalid parameter binding '{value}'. Expected NAME=VALUE."
+        ) from exc
+
+    lhs = lhs.strip()
+    rhs = rhs.strip()
+    if not lhs:
+        raise argparse.ArgumentTypeError(
+            f"Invalid parameter binding '{value}'. Missing parameter name."
+        )
+
+    try:
+        numeric_value = float(rhs)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"Invalid parameter binding '{value}'. VALUE must be numeric."
+        ) from exc
+
+    indexed_match = re.fullmatch(r"(.+)\[(\d+)\]", lhs)
+    if indexed_match:
+        return (
+            _parse_parameter_binding_name(indexed_match.group(1)),
+            int(indexed_match.group(2)),
+            numeric_value,
+        )
+
+    try:
+        binding_name = _parse_parameter_binding_name(lhs)
+    except argparse.ArgumentTypeError as exc:
+        raise argparse.ArgumentTypeError(
+            f"Invalid parameter binding '{value}'. Use NAME=VALUE, "
+            "module_identity.symbol=VALUE, or indexed variants."
+        ) from exc
+    return binding_name, 0, numeric_value
+
+
+def _parse_module_package(value: str) -> tuple[str, Path]:
+    """Parse NAME=DIR workspace package bindings."""
+    try:
+        name, directory = value.split("=", 1)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"Invalid package binding '{value}'. Expected NAME=DIR."
+        ) from exc
+
+    name = name.strip()
+    directory = directory.strip()
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", name):
+        raise argparse.ArgumentTypeError(
+            f"Invalid package binding '{value}'. NAME must be a valid package alias."
+        )
+    if not directory:
+        raise argparse.ArgumentTypeError(
+            f"Invalid package binding '{value}'. Missing package directory."
+        )
+    return name, Path(directory)
+
+
+def _build_parameter_overrides(
+    bindings: list[tuple[str, int, float]] | None,
+) -> dict[str, dict[int, float]]:
+    """Aggregate repeated CLI parameter bindings."""
+    overrides: dict[str, dict[int, float]] = {}
+    for name, index, value in bindings or []:
+        overrides.setdefault(name, {})[index] = value
+    return overrides
+
+
+def _build_module_packages(
+    bindings: list[tuple[str, Path]] | None,
+) -> dict[str, Path]:
+    """Aggregate repeated CLI package bindings."""
+    packages: dict[str, Path] = {}
+    for name, directory in bindings or []:
+        resolved = directory.expanduser().resolve()
+        existing = packages.get(name)
+        if existing is not None and existing != resolved:
+            raise CompilationError(
+                f"CLI package alias '{name}' was provided more than once with "
+                f"different directories: '{existing}' and '{resolved}'."
+            )
+        packages[name] = resolved
+    return packages
+
+
+def _add_program_compile_arguments(command_parser: argparse.ArgumentParser) -> None:
+    """Add shared program-loading arguments for compile and lower commands."""
+    command_parser.add_argument(
+        "input",
+        type=Path,
+        help="Input .rac file",
+    )
+    command_parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        help="Output file path (default: stdout)",
+    )
+    command_parser.add_argument(
+        "--effective-date",
+        type=_parse_effective_date,
+        help="Resolve temporal RAC definitions as of YYYY-MM-DD",
+    )
+    command_parser.add_argument(
+        "--parameter",
+        action="append",
+        type=_parse_parameter_binding,
+        help=(
+            "Bind an external parameter as NAME=VALUE, module_identity.symbol=VALUE, "
+            "or indexed variants"
+        ),
+    )
+    command_parser.add_argument(
+        "--parameter-file",
+        type=Path,
+        help="Load external parameter bindings from a JSON file",
+    )
+    command_parser.add_argument(
+        "--select-output",
+        action="append",
+        metavar="NAME",
+        help="Compile only the reachable subgraph needed for this public output",
+    )
+    command_parser.add_argument(
+        "--module-root",
+        action="append",
+        type=Path,
+        metavar="DIR",
+        help="Resolve bare imports from this workspace root in addition to rac.toml",
+    )
+    command_parser.add_argument(
+        "--package",
+        action="append",
+        type=_parse_module_package,
+        metavar="NAME=DIR",
+        help="Bind imports starting with NAME/ to this workspace package directory",
+    )
+
+
+def _load_program_compile_inputs(args) -> tuple[Any, dict[str, Any]]:
+    """Load the RAC program and merged parameter overrides for one CLI request."""
+    rac_program = load_rac_program(
+        args.input,
+        module_roots=[root.expanduser().resolve() for root in args.module_root or []],
+        module_packages=_build_module_packages(args.package),
+    )
+    file_parameter_overrides = load_parameter_overrides_file(args.parameter_file)
+    parameter_overrides = merge_parameter_overrides(
+        file_parameter_overrides,
+        _build_parameter_overrides(args.parameter),
+    )
+    return rac_program, parameter_overrides
 
 
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
         prog="rac-compile",
-        description="Compile RAC .rac/.cos files to standalone JavaScript or Python",
+        description=(
+            "Compile RAC .rac files to standalone JavaScript, Python, or Rust"
+        ),
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
     # Compile command
     compile_parser = subparsers.add_parser(
         "compile",
-        help="Compile a .rac or .cos file to JavaScript",
+        help="Compile a .rac file to JavaScript, Python, or Rust",
     )
-    compile_parser.add_argument(
-        "input",
-        type=Path,
-        help="Input .rac or .cos file",
+    _add_program_compile_arguments(compile_parser)
+    target_group = compile_parser.add_mutually_exclusive_group()
+    target_group.add_argument(
+        "--python",
+        action="store_true",
+        help="Generate Python code instead of JavaScript (default: JavaScript)",
     )
-    compile_parser.add_argument(
-        "-o",
-        "--output",
-        type=Path,
-        help="Output file path (default: stdout)",
+    target_group.add_argument(
+        "--rust",
+        action="store_true",
+        help="Generate Rust code instead of JavaScript (default: JavaScript)",
+    )
+    lower_parser = subparsers.add_parser(
+        "lower",
+        help="Lower a .rac file to a backend-neutral JSON bundle",
+    )
+    _add_program_compile_arguments(lower_parser)
+
+    harness_parser = subparsers.add_parser(
+        "harness",
+        help="Run the objective compiler harness scorecard",
+    )
+    harness_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit the harness summary as JSON",
+    )
+    harness_parser.add_argument(
+        "--case",
+        action="append",
+        metavar="NAME",
+        help="Run only the named harness case",
+    )
+    harness_parser.add_argument(
+        "--include-external",
+        action="store_true",
+        help="Include opt-in external oracle cases such as PolicyEngine checks",
     )
 
     # EITC command (pre-built)
@@ -73,19 +303,55 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "compile":
+    if args.command in {"compile", "lower"}:
         if not args.input.exists():
             print(f"Error: {args.input} not found", file=sys.stderr)
             sys.exit(1)
 
-        content = args.input.read_text()
-        rac_file = parse_rac(content)
-        gen = rac_file.to_js_generator()
-        code = gen.generate()
+        try:
+            rac_program, parameter_overrides = _load_program_compile_inputs(args)
+            if args.command == "lower":
+                code = rac_program.to_lowered_program(
+                    effective_date=args.effective_date,
+                    parameter_overrides=parameter_overrides,
+                    outputs=args.select_output,
+                ).to_json()
+                lang = "Lowered JSON"
+            elif args.rust:
+                gen = rac_program.to_rust_generator(
+                    effective_date=args.effective_date,
+                    parameter_overrides=parameter_overrides,
+                    outputs=args.select_output,
+                )
+                lang = "Rust"
+                code = gen.generate()
+            elif args.python:
+                gen = rac_program.to_python_generator(
+                    effective_date=args.effective_date,
+                    parameter_overrides=parameter_overrides,
+                    outputs=args.select_output,
+                )
+                lang = "Python"
+                code = gen.generate()
+            else:
+                gen = rac_program.to_js_generator(
+                    effective_date=args.effective_date,
+                    parameter_overrides=parameter_overrides,
+                    outputs=args.select_output,
+                )
+                lang = "JavaScript"
+                code = gen.generate()
+        except (CompilationError, ParameterBindingError) as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
 
         if args.output:
             args.output.write_text(code)
-            print(f"Compiled {args.input} -> {args.output}", file=sys.stderr)
+            action = "Lowered" if args.command == "lower" else "Compiled"
+            print(
+                f"{action} {args.input} -> {args.output} ({lang})",
+                file=sys.stderr,
+            )
         else:
             print(code)
 
@@ -102,6 +368,24 @@ def main():
             print(f"Generated {lang} EITC calculator -> {args.output}", file=sys.stderr)
         else:
             print(code)
+
+    elif args.command == "harness":
+        try:
+            summary = run_compiler_harness(
+                case_names=args.case,
+                include_external=args.include_external,
+            )
+        except CompilationError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
+
+        if args.json:
+            print(format_harness_summary_json(summary))
+        else:
+            print(format_harness_summary(summary))
+
+        if summary.failed or summary.skipped:
+            sys.exit(1)
 
     elif args.command is None:
         parser.print_help()

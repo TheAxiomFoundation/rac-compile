@@ -54,6 +54,11 @@ class TestValidationInit:
 
         assert callable(run_policyengine)
 
+    def test_imports_run_policyengine_household(self):
+        from src.rac_compile.validation import run_policyengine_household
+
+        assert callable(run_policyengine_household)
+
 
 # ============================================================
 # validation/comparator.py
@@ -237,6 +242,19 @@ class TestComparator:
         assert results.matches["snap"] == 0
         assert results.match_rates["snap"] == 0
 
+    def test_compare_reads_execution_modes_from_dataframe_attrs(self):
+        """Comparison results preserve execution-mode provenance from the runner."""
+        from src.rac_compile.validation.comparator import Comparator
+
+        df = self._make_df(add_snap_data=False)
+        df.attrs["rac_execution_mode"] = "compiled_example"
+        df.attrs["policyengine_execution_mode"] = "policyengine_household"
+
+        results = Comparator().compare(df)
+
+        assert results.rac_execution_mode == "compiled_example"
+        assert results.policyengine_execution_mode == "policyengine_household"
+
     def test_pct_difference_calculation(self):
         """Percentage difference is calculated correctly."""
         from src.rac_compile.validation.comparator import Comparator
@@ -342,12 +360,16 @@ class TestComparisonResults:
             },
             config=config,
             full_data=pd.DataFrame({"a": [1, 2]}) if with_data else None,
+            rac_execution_mode="compiled_example",
+            policyengine_execution_mode="policyengine_household",
         )
 
     def test_summary(self):
         results = self._make_results()
         summary = results.summary()
         assert summary["total_households"] == 100
+        assert summary["rac_execution_mode"] == "compiled_example"
+        assert summary["policyengine_execution_mode"] == "policyengine_household"
         assert "eitc" in summary["variables"]
         assert summary["variables"]["eitc"]["match_rate"] == 100.0
 
@@ -356,6 +378,8 @@ class TestComparisonResults:
         report = results.detailed_report()
         assert "RAC vs PolicyEngine-US Validation Report" in report
         assert "Total Households: 100" in report
+        assert "RAC execution mode: compiled_example" in report
+        assert "PolicyEngine execution mode: policyengine_household" in report
         assert "EITC Comparison:" in report
         assert "Matches:" in report
 
@@ -421,6 +445,8 @@ class TestValidateFunction:
         results_df["rac_actc"] = [50, 100]
         results_df["pe_actc"] = [50, 100]
         results_df["state_code"] = ["CA", "NY"]
+        results_df.attrs["rac_execution_mode"] = "compiled_example"
+        results_df.attrs["policyengine_execution_mode"] = "policyengine_household"
 
         with (
             patch(
@@ -434,6 +460,7 @@ class TestValidateFunction:
         ):
             results = validate(source="policyengine", year=2025, sample_size=2)
             assert results.total_households == 2
+            assert results.rac_execution_mode == "compiled_example"
 
     def test_validate_with_output_dir(self, tmp_path):
         from src.rac_compile.validation.comparator import validate
@@ -494,6 +521,8 @@ class TestValidateFullFunction:
                 "weight": [1.0, 1.0],
             }
         )
+        results_df.attrs["rac_execution_mode"] = "compiled_batch"
+        results_df.attrs["policyengine_execution_mode"] = "policyengine_microsim"
 
         with patch(
             "src.rac_compile.validation.runners.run_both_vectorized",
@@ -501,6 +530,7 @@ class TestValidateFullFunction:
         ):
             results = validate_full(year=2025)
             assert results.total_households == 2
+            assert results.rac_execution_mode == "compiled_batch"
 
     def test_validate_full_with_output_dir(self, tmp_path):
         from src.rac_compile.validation.comparator import validate_full
@@ -796,6 +826,38 @@ class TestIterateHouseholds:
 class TestRunRAC:
     """Test run_rac function."""
 
+    @patch("src.rac_compile.validation.runners._load_compiled_validation_calculators")
+    def test_run_rac_uses_compiled_examples(self, mock_load):
+        """run_rac sources values from the compiled example calculators."""
+        from src.rac_compile.validation.runners import (
+            CompiledValidationCalculators,
+            run_rac,
+        )
+
+        mock_load.return_value = CompiledValidationCalculators(
+            eitc=lambda **kwargs: {"eitc": 111},
+            ctc=lambda **kwargs: {"ctc": 222, "actc": 333},
+            snap=lambda **kwargs: {"snap_benefit": 444},
+        )
+        df = pd.DataFrame(
+            {
+                "household_id": [1],
+                "earned_income": [15000],
+                "agi": [15000],
+                "n_children": [1],
+                "is_joint": [False],
+                "household_size": [2],
+                "gross_monthly_income": [1250],
+            }
+        )
+
+        results = run_rac(df, show_progress=False)
+
+        assert results.loc[0, "rac_eitc"] == 111
+        assert results.loc[0, "rac_ctc"] == 222
+        assert results.loc[0, "rac_actc"] == 333
+        assert results.loc[0, "rac_snap"] == 444
+
     def test_run_rac_calculates_all(self):
         from src.rac_compile.validation.runners import run_rac
 
@@ -816,6 +878,51 @@ class TestRunRAC:
         assert "rac_actc" in results.columns
         assert "rac_snap" in results.columns
         assert len(results) == 2
+        assert results.attrs["rac_execution_mode"] == "compiled_example"
+
+    def test_run_rac_matches_reference_examples(self):
+        """Compiled sample validation calculators stay aligned with references."""
+        from src.rac_compile.calculators import (
+            calculate_actc,
+            calculate_ctc,
+            calculate_eitc,
+            calculate_snap_benefit,
+        )
+        from src.rac_compile.validation.runners import run_rac
+
+        df = pd.DataFrame(
+            {
+                "household_id": [1],
+                "earned_income": [15000],
+                "agi": [15000],
+                "n_children": [1],
+                "is_joint": [False],
+                "household_size": [2],
+                "gross_monthly_income": [1250],
+            }
+        )
+
+        results = run_rac(df, show_progress=False)
+
+        assert results.loc[0, "rac_eitc"] == calculate_eitc(
+            earned_income=15000,
+            agi=15000,
+            n_children=1,
+            is_joint=False,
+        ).eitc
+        assert results.loc[0, "rac_ctc"] == calculate_ctc(
+            n_qualifying_children=1,
+            agi=15000,
+            is_joint=False,
+        ).ctc
+        assert results.loc[0, "rac_actc"] == calculate_actc(
+            n_qualifying_children=1,
+            earned_income=15000,
+        ).actc
+        assert results.loc[0, "rac_snap"] == calculate_snap_benefit(
+            household_size=2,
+            gross_income=1250,
+        ).benefit
 
     def test_run_rac_with_progress(self):
         """run_rac with show_progress=True uses tqdm."""
@@ -876,6 +983,10 @@ class TestRunPolicyEngine:
             results = run_policyengine(df, show_progress=False)
             assert len(results) == 2
             assert results.loc[0, "pe_eitc"] == 500.0
+            assert (
+                results.attrs["policyengine_execution_mode"]
+                == "policyengine_household"
+            )
 
     @patch("src.rac_compile.validation.runners._run_single_pe_simulation")
     def test_run_policyengine_handles_errors(self, mock_sim):
@@ -1014,6 +1125,34 @@ class TestRunSinglePESimulation:
             assert "extra_1" in situation["people"]
 
 
+class TestRunPolicyEngineHousehold:
+    """Test the single-household PolicyEngine bridge helper."""
+
+    def test_household_helper_annualizes_monthly_snap_income(self):
+        from src.rac_compile.validation.runners import run_policyengine_household
+
+        mock_sim_instance = MagicMock()
+        mock_sim_instance.calculate.side_effect = lambda var, year: np.array([100.0])
+
+        mock_simulation_cls = MagicMock(return_value=mock_sim_instance)
+        mock_pe = MagicMock()
+        mock_pe.Simulation = mock_simulation_cls
+
+        with patch.dict(sys.modules, {"policyengine_us": mock_pe}):
+            result = run_policyengine_household(
+                {
+                    "gross_income": 2000,
+                    "household_size": 4,
+                    "state_code": "CA",
+                }
+            )
+
+        assert "pe_snap" in result
+        situation = mock_simulation_cls.call_args.kwargs["situation"]
+        assert situation["people"]["adult"]["employment_income"][2025] == 24000
+        assert situation["households"]["household"]["state_code"][2025] == "CA"
+
+
 class TestRunBoth:
     """Test run_both function."""
 
@@ -1034,16 +1173,25 @@ class TestRunBoth:
                 "rac_eitc": [100, 200],
             }
         )
+        mock_rac.return_value.attrs["rac_execution_mode"] = "compiled_example"
         mock_pe.return_value = pd.DataFrame(
             {
                 "household_id": [1, 2],
                 "pe_eitc": [100, 200],
             }
         )
+        mock_pe.return_value.attrs["policyengine_execution_mode"] = (
+            "policyengine_household"
+        )
         result = run_both(df)
         assert "rac_eitc" in result.columns
         assert "pe_eitc" in result.columns
         assert len(result) == 2
+        assert result.attrs["rac_execution_mode"] == "compiled_example"
+        assert (
+            result.attrs["policyengine_execution_mode"]
+            == "policyengine_household"
+        )
 
 
 class TestRunRACVectorized:
@@ -1069,6 +1217,7 @@ class TestRunRACVectorized:
         assert "rac_actc" in results.columns
         assert "rac_snap" in results.columns
         assert len(results) == 3
+        assert results.attrs["rac_execution_mode"] == "compiled_batch"
         # Zero income should have zero EITC
         assert results.loc[1, "rac_eitc"] == 0
 

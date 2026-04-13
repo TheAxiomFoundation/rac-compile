@@ -5,6 +5,7 @@ Generates standalone JS calculators that can run in browsers
 without any backend - perfect for static sites like rules.foundation/demo.
 """
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -16,6 +17,7 @@ class Parameter:
     name: str
     values: dict[int, float]  # key by number of children or bracket index
     source: str  # e.g., "26 USC 32(b)(1)" or "Rev. Proc. 2024-40"
+    module_identity: str = ""
 
 
 @dataclass
@@ -27,6 +29,15 @@ class Variable:
     formula_js: str
     label: str = ""
     citation: str = ""
+    module_identity: str = ""
+
+
+@dataclass
+class Output:
+    """A public output exposed by the generated calculator."""
+
+    name: str
+    variable_name: str
 
 
 class JSCodeGenerator:
@@ -51,6 +62,7 @@ class JSCodeGenerator:
         self.typescript = typescript
         self.parameters: dict[str, Parameter] = {}
         self.variables: list[Variable] = []
+        self.outputs: list[Output] | None = None
         self.inputs: dict[str, Any] = {}  # name -> default value
 
     def add_input(self, name: str, default: Any = 0, type_hint: str = "number") -> None:
@@ -61,10 +73,19 @@ class JSCodeGenerator:
         self.inputs[name] = {"default": default, "type": type_hint}
 
     def add_parameter(
-        self, name: str, values: dict[int, float], source: str = ""
+        self,
+        name: str,
+        values: dict[int, float],
+        source: str = "",
+        module_identity: str = "",
     ) -> None:
         """Add a parameter with values indexed by bracket."""
-        self.parameters[name] = Parameter(name=name, values=values, source=source)
+        self.parameters[name] = Parameter(
+            name=name,
+            values=values,
+            source=source,
+            module_identity=module_identity,
+        )
 
     def add_variable(
         self,
@@ -73,6 +94,7 @@ class JSCodeGenerator:
         formula_js: str,
         label: str = "",
         citation: str = "",
+        module_identity: str = "",
     ) -> None:
         """Add a calculated variable with its JS formula."""
         self.variables.append(
@@ -82,8 +104,13 @@ class JSCodeGenerator:
                 formula_js=formula_js,
                 label=label,
                 citation=citation,
+                module_identity=module_identity,
             )
         )
+
+    def set_outputs(self, output_names: list[Any]) -> None:
+        """Set the public outputs returned by calculate()."""
+        self.outputs = self._normalize_outputs(output_names)
 
     def generate(self) -> str:
         """Generate the complete JavaScript module."""
@@ -102,7 +129,7 @@ class JSCodeGenerator:
             for param in self.parameters.values():
                 if param.source:
                     sources.add(param.source)
-            for var in self.variables:
+            for output, var in self._resolved_outputs():
                 if var.citation:
                     sources.add(var.citation)
             for src in sorted(sources):
@@ -121,6 +148,9 @@ class JSCodeGenerator:
                 comment = f"  // {param.source}" if param.source else ""
                 lines.append(f"  {param.name}: {{ {values_js} }},{comment}")
             lines.append("};")
+            lines.append("")
+        else:
+            lines.append("const PARAMS = {};")
             lines.append("")
 
         # Main calculate function
@@ -156,27 +186,252 @@ class JSCodeGenerator:
         # Add calculations
         for var in self.variables:
             lines.append(f"  // {var.citation}" if var.citation else "")
-            lines.append(f"  const {var.name} = {var.formula_js};")
+            lines.append(
+                f"  const {var.name} = {self._render_formula_js(var.formula_js)};"
+            )
             lines.append("")
 
         # Return with citations
         lines.append("  return {")
-        for var in self.variables:
-            lines.append(f"    {var.name},")
+        for output, _ in self._resolved_outputs():
+            lines.append(f"    {output.name}: {output.variable_name},")
         lines.append("    citations: [")
         for param in self.parameters.values():
             if param.source:
                 lines.append(
-                    f'      {{ param: "{param.name}", source: "{param.source}" }},'
+                    "      { "
+                    f'param: "{param.name}", '
+                    f'module_identity: "{param.module_identity}", '
+                    f'source: "{param.source}" '
+                    "},"
                 )
-        for var in self.variables:
+        for output, var in self._resolved_outputs():
             if var.citation:
                 lines.append(
-                    f'      {{ variable: "{var.name}", source: "{var.citation}" }},'
+                    "      { "
+                    f'variable: "{output.name}", '
+                    f'module_identity: "{var.module_identity}", '
+                    f'source: "{var.citation}" '
+                    "},"
                 )
         lines.append("    ],")
         lines.append("  };")
         lines.append("}")
+
+    def _render_formula_js(self, formula_js: str) -> str:
+        """Render an expression or statement block as valid JavaScript."""
+        stripped = formula_js.strip()
+        if (
+            "\n" not in stripped
+            and ";" not in stripped
+            and not self._is_return_statement_js(stripped)
+        ):
+            return stripped
+
+        lines = self._normalize_block_formula_js(stripped)
+        indented = "\n".join(f"    {line}" for line in lines)
+        return f"(() => {{\n{indented}\n  }})()"
+
+    def _normalize_block_formula_js(self, formula_js: str) -> list[str]:
+        """Ensure a JS statement block returns its final expression explicitly."""
+        lines = self._split_inline_js_statements(formula_js)
+        last_index = self._last_nonempty_line(lines)
+        if last_index is None:
+            raise ValueError("JavaScript block formulas cannot be empty.")
+
+        stripped = lines[last_index].strip()
+        if self._is_return_statement_js(stripped):
+            return lines
+        if self._is_expression_line_js(stripped):
+            indent = lines[last_index][
+                : len(lines[last_index]) - len(lines[last_index].lstrip())
+            ]
+            expression = stripped[:-1].rstrip() if stripped.endswith(";") else stripped
+            lines[last_index] = f"{indent}return {expression};"
+            return lines
+        if stripped == "}" and self._final_statement_guarantees_return_js(lines):
+            return lines
+        raise ValueError(
+            "JavaScript block formulas must end with an explicit return "
+            "or a final expression."
+        )
+
+    def _is_expression_line_js(self, line: str) -> bool:
+        """Return whether a JS line looks like an expression statement."""
+        if not line or line in {"{", "}"} or line.endswith("{"):
+            return False
+        if re.match(
+            r"(return|const|let|var|if|else|for|while|switch|case|default|break|"
+            r"continue|throw|try|catch|finally|function|class|import|export)\b",
+            line,
+        ):
+            return False
+        if re.search(r"(?<![=!<>])=(?!=)|\+=|-=|\*=|/=|%=|&&=|\|\|=|\?\?=", line):
+            return False
+        return True
+
+    def _final_statement_guarantees_return_js(self, lines: list[str]) -> bool:
+        """Return whether the final top-level JS statement always returns."""
+        ranges = self._top_level_statement_ranges_js(lines)
+        if not ranges:
+            return False
+        start, end = ranges[-1]
+        return self._statement_range_guarantees_return_js(lines, start, end)
+
+    def _top_level_statement_ranges_js(self, lines: list[str]) -> list[tuple[int, int]]:
+        """Split one JS block into top-level statement ranges."""
+        ranges: list[tuple[int, int]] = []
+        index = 0
+        while index < len(lines):
+            if not lines[index].strip():
+                index += 1
+                continue
+            start = index
+            depth = lines[index].count("{") - lines[index].count("}")
+            if depth <= 0:
+                ranges.append((start, index))
+                index += 1
+                continue
+            index += 1
+            while index < len(lines):
+                depth += lines[index].count("{") - lines[index].count("}")
+                if depth <= 0:
+                    ranges.append((start, index))
+                    index += 1
+                    break
+                index += 1
+        return ranges
+
+    def _statement_range_guarantees_return_js(
+        self,
+        lines: list[str],
+        start: int,
+        end: int,
+    ) -> bool:
+        """Return whether one top-level JS statement range always returns."""
+        first = next(
+            (
+                lines[index].strip()
+                for index in range(start, end + 1)
+                if lines[index].strip()
+            ),
+            "",
+        )
+        if not first:
+            return False
+        if self._is_return_statement_js(first):
+            return True
+        return (
+            (first.startswith("if ") or first.startswith("if("))
+            and self._if_chain_guarantees_return_js(lines, start, end)
+        )
+
+    def _if_chain_guarantees_return_js(
+        self,
+        lines: list[str],
+        start: int,
+        end: int,
+    ) -> bool:
+        """Return whether one final JS if/else chain returns on every branch."""
+        branch_ranges: list[tuple[int, int]] = []
+        saw_final_else = False
+        body_start = start + 1
+        depth = 1
+        index = start + 1
+
+        while index <= end:
+            stripped = lines[index].strip()
+            if depth == 1 and stripped.startswith("} else if"):
+                branch_ranges.append((body_start, index - 1))
+                body_start = index + 1
+                index += 1
+                continue
+            if depth == 1 and stripped.startswith("} else {"):
+                branch_ranges.append((body_start, index - 1))
+                body_start = index + 1
+                saw_final_else = True
+                index += 1
+                continue
+
+            depth += stripped.count("{") - stripped.count("}")
+            if depth == 0:
+                branch_ranges.append((body_start, index - 1))
+                break
+            index += 1
+
+        if not saw_final_else or not branch_ranges:
+            return False
+        return all(
+            self._sequence_guarantees_return_js(lines, branch_start, branch_end)
+            for branch_start, branch_end in branch_ranges
+        )
+
+    def _sequence_guarantees_return_js(
+        self,
+        lines: list[str],
+        start: int,
+        end: int,
+    ) -> bool:
+        """Return whether one nested JS statement sequence always returns."""
+        if end < start:
+            return False
+        ranges = self._top_level_statement_ranges_js(lines[start : end + 1])
+        if not ranges:
+            return False
+        nested_start, nested_end = ranges[-1]
+        return self._statement_range_guarantees_return_js(
+            lines[start : end + 1],
+            nested_start,
+            nested_end,
+        )
+
+    def _last_nonempty_line(self, lines: list[str]) -> int | None:
+        """Return the index of the last non-empty line in a block."""
+        for index in range(len(lines) - 1, -1, -1):
+            if lines[index].strip():
+                return index
+        return None
+
+    def _is_return_statement_js(self, line: str) -> bool:
+        """Return whether a JS line starts with a return statement."""
+        return bool(re.match(r"return\b", line))
+
+    def _split_inline_js_statements(self, formula_js: str) -> list[str]:
+        """Split same-line JS statements on semicolons outside string literals."""
+        lines: list[str] = []
+        for raw_line in formula_js.split("\n"):
+            indent = raw_line[: len(raw_line) - len(raw_line.lstrip())]
+            content = raw_line[len(indent) :]
+            current: list[str] = []
+            quote: str | None = None
+            escaped = False
+            for char in content:
+                if quote is not None:
+                    current.append(char)
+                    if escaped:
+                        escaped = False
+                    elif char == "\\":
+                        escaped = True
+                    elif char == quote:
+                        quote = None
+                    continue
+                if char in {"'", '"'}:
+                    quote = char
+                    current.append(char)
+                    continue
+                if char == ";":
+                    statement = "".join(current).strip()
+                    if statement:
+                        lines.append(f"{indent}{statement};")
+                    current = []
+                    continue
+                current.append(char)
+            statement = "".join(current).strip()
+            if statement:
+                lines.append(f"{indent}{statement}")
+            elif not lines or lines[-1].strip():
+                lines.append("")
+        return lines
 
     def _generate_typescript_function(self, lines: list[str]) -> None:
         """Generate TypeScript function with proper types."""
@@ -189,9 +444,12 @@ class JSCodeGenerator:
 
         # Interface for result
         lines.append("interface CalculatorResult {")
-        for var in self.variables:
-            lines.append(f"  {var.name}: number;")
-        citations_type = "Array<{param?: string; variable?: string; source: string}>"
+        for output, _ in self._resolved_outputs():
+            lines.append(f"  {output.name}: number;")
+        citations_type = (
+            "Array<{param?: string; variable?: string; module_identity?: string; "
+            "source: string}>"
+        )
         lines.append(f"  citations: {citations_type};")
         lines.append("}")
         lines.append("")
@@ -217,22 +475,63 @@ class JSCodeGenerator:
 
         # Return
         lines.append("  return {")
-        for var in self.variables:
-            lines.append(f"    {var.name},")
+        for output, _ in self._resolved_outputs():
+            lines.append(f"    {output.name}: {output.variable_name},")
         lines.append("    citations: [")
         for param in self.parameters.values():
             if param.source:
                 lines.append(
-                    f'      {{ param: "{param.name}", source: "{param.source}" }},'
+                    "      { "
+                    f'param: "{param.name}", '
+                    f'module_identity: "{param.module_identity}", '
+                    f'source: "{param.source}" '
+                    "},"
                 )
-        for var in self.variables:
+        for output, var in self._resolved_outputs():
             if var.citation:
                 lines.append(
-                    f'      {{ variable: "{var.name}", source: "{var.citation}" }},'
+                    "      { "
+                    f'variable: "{output.name}", '
+                    f'module_identity: "{var.module_identity}", '
+                    f'source: "{var.citation}" '
+                    "},"
                 )
         lines.append("    ],")
         lines.append("  };")
         lines.append("}")
+
+    def _normalize_outputs(self, output_names: list[Any]) -> list[Output]:
+        """Normalize output bindings from strings or output-like objects."""
+        outputs: list[Output] = []
+        seen_public_names: set[str] = set()
+
+        for output_name in output_names:
+            if isinstance(output_name, str):
+                output = Output(name=output_name, variable_name=output_name)
+            else:
+                public_name = getattr(output_name, "name")
+                variable_name = getattr(output_name, "variable_name", public_name)
+                output = Output(name=public_name, variable_name=variable_name)
+            if output.name in seen_public_names:
+                continue
+            seen_public_names.add(output.name)
+            outputs.append(output)
+        return outputs
+
+    def _resolved_outputs(self) -> list[tuple[Output, Variable]]:
+        """Return the public outputs paired with their backing variables."""
+        if self.outputs is None:
+            return [
+                (
+                    Output(name=variable.name, variable_name=variable.name),
+                    variable,
+                )
+                for variable in self.variables
+            ]
+        variables_by_name = {variable.name: variable for variable in self.variables}
+        return [
+            (output, variables_by_name[output.variable_name]) for output in self.outputs
+        ]
 
 
 def generate_eitc_calculator(tax_year: int = 2025) -> str:

@@ -4,6 +4,9 @@ Tests for rac-compile JS code generator.
 TDD: Tests written first, implementation follows.
 """
 
+import shutil
+import subprocess
+
 import pytest
 
 from src.rac_compile.js_generator import (
@@ -108,6 +111,23 @@ class TestGenerateOutput:
         assert "citations:" in code
         assert 'source: "26 USC 1"' in code
 
+    def test_generate_includes_module_identity_in_citations(self):
+        """Generated citations keep the leaf-derived source rule identity."""
+        gen = JSCodeGenerator()
+        gen.add_parameter("rate", {0: 10}, "26 USC 1", module_identity="shared")
+        gen.add_variable(
+            "tax",
+            [],
+            "100",
+            citation="26 USC 1(a)",
+            module_identity="benefit_amount",
+        )
+
+        code = gen.generate()
+
+        assert 'module_identity: "shared"' in code
+        assert 'module_identity: "benefit_amount"' in code
+
     def test_generate_esm_exports(self):
         """Generated code includes ESM exports."""
         gen = JSCodeGenerator()
@@ -133,6 +153,110 @@ class TestGenerateOutput:
         gen.add_parameter("a", {0: 1}, "Source A")
         code = gen.generate()
         assert "Sources:" not in code
+
+    def test_generate_multiline_formula_returns_trailing_expression(self):
+        """Multiline formulas implicitly return a trailing JS expression."""
+        gen = JSCodeGenerator()
+        gen.add_input("x", 0)
+        gen.add_variable("y", ["x"], "const tmp = x + 1;\ntmp")
+
+        code = gen.generate()
+
+        assert "return tmp;" in code
+
+        if shutil.which("node") is None:
+            pytest.skip("Node.js is required for JS runtime execution tests.")
+
+        script = "\n".join(
+            [
+                code,
+                'console.log(JSON.stringify(calculate({ x: 10 })));',
+            ]
+        )
+        proc = subprocess.run(
+            ["node", "--input-type=module"],
+            input=script,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        result = proc.stdout.splitlines()[-1]
+        assert '"y":11' in result
+
+    def test_generate_semicolon_block_returns_trailing_expression(self):
+        """Same-line semicolon blocks are normalized before JS emission."""
+        gen = JSCodeGenerator()
+        gen.add_input("x", 0)
+        gen.add_variable("y", ["x"], "tmp = x + 1; tmp")
+
+        code = gen.generate()
+
+        assert "return tmp;" in code
+
+    def test_generate_block_preserves_explicit_return_without_space(self):
+        """Explicit JS returns like return(x) stay valid in wrapped blocks."""
+        gen = JSCodeGenerator()
+        gen.add_input("x", 0)
+        gen.add_variable("y", ["x"], "tmp = x + 1;\nreturn(x + tmp)")
+
+        code = gen.generate()
+
+        assert "return(x + tmp)" in code
+
+    def test_generate_block_allows_identifier_with_keyword_prefix(self):
+        """Keyword-like identifier prefixes still compile as expressions."""
+        gen = JSCodeGenerator()
+        gen.add_input("x", 0)
+        gen.add_variable("y", ["x"], "defaultRate = x + 1;\ndefaultRate")
+
+        code = gen.generate()
+
+        assert "return defaultRate;" in code
+
+    def test_generate_if_else_chain_with_branch_returns(self):
+        """Top-level if/else chains that return on every branch stay valid."""
+        gen = JSCodeGenerator()
+        gen.add_input("wages", 0)
+        gen.add_input("is_joint", False)
+        gen.add_variable(
+            "tax",
+            ["wages", "is_joint"],
+            "\n".join(
+                [
+                    "let rate;",
+                    "if (is_joint) {",
+                    "  rate = 0.1;",
+                    "  return wages * rate;",
+                    "} else {",
+                    "  return wages * 0.2;",
+                    "}",
+                ]
+            ),
+        )
+
+        code = gen.generate()
+
+        assert "if (is_joint)" in code
+
+    def test_generate_if_without_else_still_fails(self):
+        """Partial-return JS blocks still fail loudly instead of compiling."""
+        gen = JSCodeGenerator()
+        gen.add_input("wages", 0)
+        gen.add_input("is_joint", False)
+        gen.add_variable(
+            "tax",
+            ["wages", "is_joint"],
+            "\n".join(
+                [
+                    "if (is_joint) {",
+                    "  return wages * 0.1;",
+                    "}",
+                ]
+            ),
+        )
+
+        with pytest.raises(ValueError, match="must end with an explicit return"):
+            gen.generate()
 
 
 class TestGenerateEITCCalculator:

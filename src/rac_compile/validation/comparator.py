@@ -52,11 +52,15 @@ class ComparisonResults:
     match_rates: Dict[str, float]
     config: ComparisonConfig
     full_data: Optional[pd.DataFrame] = None
+    rac_execution_mode: str = "unknown"
+    policyengine_execution_mode: str = "unknown"
 
     def summary(self) -> Dict[str, Any]:
         """Generate summary statistics."""
         return {
             "total_households": self.total_households,
+            "rac_execution_mode": self.rac_execution_mode,
+            "policyengine_execution_mode": self.policyengine_execution_mode,
             "variables": {
                 var: {
                     "matches": self.matches[var],
@@ -75,6 +79,8 @@ class ComparisonResults:
             "RAC vs PolicyEngine-US Validation Report",
             "=" * 70,
             f"Total Households: {self.total_households:,}",
+            f"RAC execution mode: {self.rac_execution_mode}",
+            f"PolicyEngine execution mode: {self.policyengine_execution_mode}",
             "",
         ]
 
@@ -191,16 +197,16 @@ class Comparator:
         match_rates = {}
 
         # Compare tax unit level variables (EITC, CTC, ACTC)
-        for var_name, cos_col, pe_col in self.VARIABLES:
+        for var_name, rac_col, pe_col in self.VARIABLES:
             if var_name == "snap":
                 continue  # Handle separately below
 
-            if cos_col not in df.columns or pe_col not in df.columns:
+            if rac_col not in df.columns or pe_col not in df.columns:
                 continue
 
             tolerance = getattr(self.config, f"{var_name}_tolerance")
             var_matches, var_mismatches = self._compare_variable(
-                df, var_name, cos_col, pe_col, tolerance
+                df, var_name, rac_col, pe_col, tolerance
             )
             matches[var_name] = var_matches
             mismatches[var_name] = var_mismatches
@@ -234,6 +240,11 @@ class Comparator:
 
         return ComparisonResults(
             total_households=total,
+            rac_execution_mode=df.attrs.get("rac_execution_mode", "unknown"),
+            policyengine_execution_mode=df.attrs.get(
+                "policyengine_execution_mode",
+                "unknown",
+            ),
             variables_compared=list(matches.keys()),
             matches=matches,
             mismatches=mismatches,
@@ -246,7 +257,7 @@ class Comparator:
         self,
         df: pd.DataFrame,
         var_name: str,
-        cos_col: str,
+        rac_col: str,
         pe_col: str,
         tolerance: float,
         id_col: Optional[str] = None,
@@ -265,7 +276,7 @@ class Comparator:
 
         # Check which are within tolerance
         is_match = np.isclose(
-            df_valid[cos_col],
+            df_valid[rac_col],
             df_valid[pe_col],
             atol=tolerance,
             equal_nan=True,
@@ -276,9 +287,9 @@ class Comparator:
         # Collect mismatches
         mismatch_rows = df_valid[~is_match]
         for _, row in mismatch_rows.iterrows():
-            cos_val = row[cos_col]
+            rac_val = row[rac_col]
             pe_val = row[pe_col]
-            diff = cos_val - pe_val
+            diff = rac_val - pe_val
 
             # Calculate percentage difference (avoid div by zero)
             pct_diff = None
@@ -289,7 +300,7 @@ class Comparator:
                 MismatchRecord(
                     household_id=row[id_col],
                     variable=var_name,
-                    rac_value=cos_val,
+                    rac_value=rac_val,
                     policyengine_value=pe_val,
                     difference=diff,
                     pct_difference=pct_diff,

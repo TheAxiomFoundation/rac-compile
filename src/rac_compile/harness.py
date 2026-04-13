@@ -1,0 +1,1327 @@
+"""Objective compiler harness for measuring generic compile progress."""
+
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+
+from .batch_executor import execute_lowered_program_batch
+from .calculators import (
+    calculate_actc,
+    calculate_ctc,
+    calculate_eitc,
+    calculate_snap_benefit,
+)
+from .compile_model import CompilationError
+from .parameter_bindings import ParameterBindingError
+from .parser import parse_rac
+from .program import load_rac_program
+from .validation import ComparisonConfig, run_policyengine_household
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+@dataclass(frozen=True)
+class HarnessCase:
+    """One objective compiler case."""
+
+    name: str
+    category: str
+    description: str
+    rac: str | None = None
+    supporting_files: dict[str, str] = field(default_factory=dict)
+    entrypoint: str = "main.rac"
+    repo_entrypoint: str | None = None
+    targets: tuple[str, ...] = ("js", "python", "rust")
+    effective_date: str | None = None
+    parameter_overrides: dict[str, Any] | None = None
+    outputs: list[str] | None = None
+    inputs: dict[str, Any] | None = None
+    expected_outputs: dict[str, Any] | None = None
+    batch_inputs: dict[str, list[Any]] | None = None
+    expected_batch_outputs: dict[str, list[Any]] | None = None
+    output_tolerances: dict[str, float] | None = None
+    oracle: str | None = None
+    external: bool = False
+    expected_error: str | None = None
+
+
+@dataclass(frozen=True)
+class HarnessResult:
+    """One executed harness result."""
+
+    case: str
+    category: str
+    passed: bool
+    status: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class HarnessSummary:
+    """Harness summary with case results and aggregate counts."""
+
+    total: int
+    passed: int
+    failed: int
+    skipped: int
+    by_category: dict[str, dict[str, int]]
+    results: list[HarnessResult] = field(default_factory=list)
+
+    @property
+    def score(self) -> str:
+        """Human-readable score."""
+        return f"{self.passed}/{self.total}"
+
+    def to_dict(self) -> dict[str, Any]:
+        """Return a JSON-serializable summary."""
+        return {
+            "total": self.total,
+            "passed": self.passed,
+            "failed": self.failed,
+            "skipped": self.skipped,
+            "score": self.score,
+            "by_category": self.by_category,
+            "results": [
+                {
+                    "case": result.case,
+                    "category": result.category,
+                    "passed": result.passed,
+                    "status": result.status,
+                    "detail": result.detail,
+                }
+                for result in self.results
+            ],
+        }
+
+
+HARNESS_CASES: tuple[HarnessCase, ...] = (
+    HarnessCase(
+        name="basic_straight_line",
+        category="core",
+        description="Straight-line formulas compile for all supported targets.",
+        rac="""
+rate:
+  source: "Test"
+  from 2024-01-01: 0.2
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+""",
+        inputs={"wages": 100},
+        expected_outputs={"tax": 20},
+    ),
+    HarnessCase(
+        name="comparison_expression",
+        category="core",
+        description="Scalar comparison expressions execute correctly.",
+        rac="""
+threshold:
+  source: "Test"
+  from 2024-01-01: 1000
+
+flag:
+  entity: Person
+  period: Year
+  dtype: Bool
+  from 2024-01-01:
+    return wages <= threshold
+""",
+        inputs={"wages": 500},
+        expected_outputs={"flag": True},
+    ),
+    HarnessCase(
+        name="implicit_return_block",
+        category="core",
+        description="Terminal bare expressions are treated as implicit returns.",
+        rac="""
+result:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    tmp = wages + 1
+    tmp
+""",
+        inputs={"wages": 10},
+        expected_outputs={"result": 11},
+    ),
+    HarnessCase(
+        name="temporal_resolution",
+        category="temporal",
+        description="Temporal formulas resolve with an effective date.",
+        rac="""
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * 0.1
+  from 2025-01-01:
+    return wages * 0.2
+""",
+        effective_date="2025-06-01",
+        inputs={"wages": 100},
+        expected_outputs={"tax": 20},
+    ),
+    HarnessCase(
+        name="source_only_parameter_binding",
+        category="bindings",
+        description="Source-only parameters compile with explicit bindings.",
+        rac="""
+rate:
+  source: "external/rate"
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+""",
+        parameter_overrides={"rate": 0.25},
+        inputs={"wages": 100},
+        expected_outputs={"tax": 25},
+    ),
+    HarnessCase(
+        name="branching_formula",
+        category="control_flow",
+        description="If/else formulas compile and execute correctly.",
+        rac="""
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    if is_joint:
+      rate = 0.1
+    else:
+      rate = 0.2
+    return wages * rate
+""",
+        inputs={"wages": 100, "is_joint": True},
+        expected_outputs={"tax": 10},
+    ),
+    HarnessCase(
+        name="branching_batch_execution",
+        category="control_flow",
+        description=(
+            "Batch execution handles branch-local assignments and skips dead "
+            "branches."
+        ),
+        rac="""
+threshold:
+  source: "Test"
+  values:
+    0: 100
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    if is_joint:
+      rate = 0.1
+      return wages * rate
+    else:
+      return threshold[n_children]
+""",
+        inputs={"wages": 100, "is_joint": True, "n_children": 0},
+        expected_outputs={"tax": 10},
+        batch_inputs={
+            "wages": [100, 200, 300],
+            "is_joint": [True, False, True],
+            "n_children": [999, 0, 12345],
+        },
+        expected_batch_outputs={"tax": [10, 100, 30]},
+    ),
+    HarnessCase(
+        name="selected_output_pruning",
+        category="subgraph",
+        description="Selected outputs prune to the reachable variable graph.",
+        rac="""
+rate:
+  source: "Test"
+  from 2024-01-01: 0.1
+
+taxable_income:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages - deduction
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return taxable_income * rate
+
+bonus:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * 0.5
+""",
+        outputs=["tax"],
+        inputs={"wages": 1000, "deduction": 100},
+        expected_outputs={"tax": 90},
+    ),
+    HarnessCase(
+        name="cross_file_import_pruning",
+        category="graph",
+        description="Imported helpers compile through the reachable cross-file graph.",
+        rac="""
+import "./shared.rac"
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return taxable_income * rate
+""",
+        supporting_files={
+            "shared.rac": """
+rate:
+  source: "shared-rate"
+  from 2024-01-01: 0.1
+
+taxable_income:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages - deduction
+
+bonus:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    while wages > 0:
+      return wages
+"""
+        },
+        outputs=["tax"],
+        inputs={"wages": 1000, "deduction": 100},
+        expected_outputs={"tax": 90},
+    ),
+    HarnessCase(
+        name="aliased_import_namespacing",
+        category="graph",
+        description="Import aliases allow duplicate symbol names across modules.",
+        rac="""
+import "./left.rac" as left
+import "./right.rac" as right
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * left.rate + wages * right.rate
+""",
+        supporting_files={
+            "left.rac": """
+rate:
+  source: "left-rate"
+  from 2024-01-01: 0.1
+""",
+            "right.rac": """
+rate:
+  source: "right-rate"
+  from 2024-01-01: 0.2
+""",
+        },
+        inputs={"wages": 100},
+        expected_outputs={"tax": 30},
+    ),
+    HarnessCase(
+        name="selective_import_exports",
+        category="graph",
+        description="Selective imports respect explicit module exports.",
+        rac="""
+from "./shared.rac" import rate_public as rate, taxable_income
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return taxable_income * rate
+""",
+        supporting_files={
+            "shared.rac": """
+export rate_public, taxable_income
+
+rate_public:
+  source: "shared-rate"
+  from 2024-01-01: 0.1
+
+hidden_rate:
+  source: "hidden-rate"
+  from 2024-01-01: 0.2
+
+taxable_income:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages - deduction
+""",
+        },
+        inputs={"wages": 1000, "deduction": 100},
+        expected_outputs={"tax": 90},
+    ),
+    HarnessCase(
+        name="export_alias_public_output",
+        category="graph",
+        description="Export aliases define public import names and result keys.",
+        rac="""
+from "./shared.rac" import rate
+export tax as benefit_amount
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+""",
+        supporting_files={
+            "shared.rac": """
+export private_rate as rate
+
+private_rate:
+  source: "shared-rate"
+  from 2024-01-01: 0.1
+"""
+        },
+        inputs={"wages": 100},
+        expected_outputs={"benefit_amount": 10},
+    ),
+    HarnessCase(
+        name="module_re_export_surface",
+        category="graph",
+        description="Modules can re-export imported symbols into a new public surface.",
+        rac="""
+export from "./upstream.rac" import upstream_benefit as benefit_amount
+""",
+        supporting_files={
+            "upstream.rac": """
+export tax as upstream_benefit
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * 0.1
+"""
+        },
+        inputs={"wages": 100},
+        expected_outputs={"benefit_amount": 10},
+    ),
+    HarnessCase(
+        name="module_root_manifest_import",
+        category="graph",
+        description="Bare imports resolve through rac.toml module roots.",
+        rac="""
+from "tax/shared.rac" import rate
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+""",
+        supporting_files={
+            "rac.toml": """
+[module_resolution]
+roots = ["./lib"]
+""",
+            "lib/tax/shared.rac": """
+export private_rate as rate
+
+private_rate:
+  source: "base-rate"
+  from 2024-01-01: 0.1
+""",
+        },
+        inputs={"wages": 100},
+        expected_outputs={"tax": 10},
+    ),
+    HarnessCase(
+        name="package_alias_manifest_import",
+        category="graph",
+        description="Workspace package aliases resolve stable bare import prefixes.",
+        rac="""
+from "tax/shared.rac" import rate
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+""",
+        supporting_files={
+            "rac.toml": """
+[module_resolution.packages]
+tax = "./packages/tax"
+""",
+            "packages/tax/shared.rac": """
+export private_rate as rate
+
+private_rate:
+  source: "base-rate"
+  from 2024-01-01: 0.1
+""",
+        },
+        inputs={"wages": 100},
+        expected_outputs={"tax": 10},
+    ),
+    HarnessCase(
+        name="unsupported_loop_fails",
+        category="unsupported",
+        description="Unsupported loops fail loudly instead of compiling.",
+        rac="""
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    while wages > 0:
+      return wages
+""",
+        expected_error="unsupported statement 'while'",
+    ),
+    HarnessCase(
+        name="oracle_eitc_example",
+        category="oracle",
+        description="Compiled eitc.rac matches the Python reference implementation.",
+        repo_entrypoint="examples/eitc.rac",
+        inputs={
+            "earned_income": 15000,
+            "agi": 15000,
+            "n_children": 1,
+            "is_joint": False,
+        },
+        outputs=["eitc"],
+        oracle="eitc_reference",
+    ),
+    HarnessCase(
+        name="oracle_ctc_example",
+        category="oracle",
+        description="Compiled ctc.rac matches the Python reference implementation.",
+        repo_entrypoint="examples/ctc.rac",
+        inputs={
+            "n_qualifying_children": 2,
+            "agi": 100000,
+            "is_joint": True,
+            "earned_income": 80000,
+        },
+        outputs=["ctc", "actc"],
+        oracle="ctc_reference",
+    ),
+    HarnessCase(
+        name="oracle_snap_example",
+        category="oracle",
+        description="Compiled snap.rac matches the Python reference implementation.",
+        repo_entrypoint="examples/snap.rac",
+        inputs={"household_size": 4, "gross_income": 2000},
+        outputs=["snap_benefit"],
+        oracle="snap_reference",
+    ),
+    HarnessCase(
+        name="policyengine_snap_example",
+        category="policyengine",
+        description=(
+            "Compiled snap.rac stays within the PolicyEngine SNAP tolerance "
+            "on a fixed household."
+        ),
+        repo_entrypoint="examples/snap.rac",
+        targets=("python",),
+        inputs={"household_size": 4, "gross_income": 2000, "state_code": "CA"},
+        outputs=["snap_benefit"],
+        output_tolerances={"snap_benefit": ComparisonConfig().snap_tolerance},
+        oracle="policyengine_snap_reference",
+        external=True,
+    ),
+)
+
+
+def run_compiler_harness(
+    case_names: list[str] | None = None,
+    *,
+    include_external: bool = False,
+) -> HarnessSummary:
+    """Run the objective compiler harness."""
+    selected_cases = _select_cases(case_names, include_external=include_external)
+    results = [_run_case(case) for case in selected_cases]
+    by_category: dict[str, dict[str, int]] = {}
+    for result in results:
+        category_summary = by_category.setdefault(
+            result.category,
+            {"total": 0, "passed": 0, "failed": 0, "skipped": 0},
+        )
+        category_summary["total"] += 1
+        category_summary[result.status] += 1
+
+    passed = sum(1 for result in results if result.status == "passed")
+    failed = sum(1 for result in results if result.status == "failed")
+    skipped = sum(1 for result in results if result.status == "skipped")
+    return HarnessSummary(
+        total=len(results),
+        passed=passed,
+        failed=failed,
+        skipped=skipped,
+        by_category=by_category,
+        results=results,
+    )
+
+
+def format_harness_summary(summary: HarnessSummary) -> str:
+    """Format a harness summary for CLI output."""
+    lines = [
+        f"Compiler harness score: {summary.score}",
+        f"Passed: {summary.passed}",
+        f"Failed: {summary.failed}",
+        f"Skipped: {summary.skipped}",
+        "",
+        "By category:",
+    ]
+    for category, counts in sorted(summary.by_category.items()):
+        lines.append(
+            f"- {category}: {counts['passed']}/{counts['total']} passed"
+            + (f", {counts['failed']} failed" if counts["failed"] else "")
+            + (f", {counts['skipped']} skipped" if counts["skipped"] else "")
+        )
+
+    failing = [result for result in summary.results if result.status != "passed"]
+    if failing:
+        lines.append("")
+        lines.append("Non-passing cases:")
+        for result in failing:
+            lines.append(f"- {result.case} [{result.status}]: {result.detail}")
+
+    return "\n".join(lines)
+
+
+def format_harness_summary_json(summary: HarnessSummary) -> str:
+    """Format a harness summary as JSON."""
+    return json.dumps(summary.to_dict(), indent=2, sort_keys=True)
+
+
+def _select_cases(
+    case_names: list[str] | None,
+    *,
+    include_external: bool = False,
+) -> list[HarnessCase]:
+    """Select a subset of harness cases by name."""
+    if case_names is None:
+        return [
+            case for case in HARNESS_CASES if include_external or not case.external
+        ]
+
+    available = {case.name: case for case in HARNESS_CASES}
+    missing = [name for name in case_names if name not in available]
+    if missing:
+        names = ", ".join(missing)
+        raise CompilationError(f"Unknown harness case(s): {names}.")
+    return [available[name] for name in case_names]
+
+
+def _run_case(case: HarnessCase) -> HarnessResult:
+    """Run one harness case."""
+    try:
+        program = _load_case_program(case)
+        expected_outputs = _resolve_expected_outputs(case)
+        lowered_program = program.to_lowered_program(
+            effective_date=case.effective_date,
+            parameter_overrides=case.parameter_overrides,
+            outputs=case.outputs,
+        )
+        lowered_detail = _check_lowered_program(
+            lowered_program,
+            expected_outputs=expected_outputs,
+        )
+        if lowered_detail is not None:
+            return HarnessResult(
+                case=case.name,
+                category=case.category,
+                passed=False,
+                status="failed",
+                detail=lowered_detail,
+            )
+        if case.batch_inputs is not None:
+            batch_detail = _check_batch_runtime(
+                lowered_program,
+                case.batch_inputs,
+                case.expected_batch_outputs,
+                output_tolerances=case.output_tolerances,
+            )
+            if batch_detail is not None:
+                return HarnessResult(
+                    case=case.name,
+                    category=case.category,
+                    passed=False,
+                    status="failed",
+                    detail=batch_detail,
+                )
+        runtime_inputs = None
+        if case.inputs is not None:
+            lowered_input_names = {
+                compiled_input.name for compiled_input in lowered_program.inputs
+            }
+            runtime_inputs = {
+                name: value
+                for name, value in case.inputs.items()
+                if name in lowered_input_names
+            }
+        generated: dict[str, str] = {}
+        node_available = _has_node_runtime()
+        rustc_available = _has_rustc_runtime()
+        for target in case.targets:
+            generated[target] = _compile_target(case, lowered_program, target)
+
+        if case.expected_error is not None:
+            return HarnessResult(
+                case=case.name,
+                category=case.category,
+                passed=False,
+                status="failed",
+                detail="Expected compilation to fail, but it succeeded.",
+            )
+
+        if "js" in generated and node_available:
+            js_check = _check_js_syntax(generated["js"])
+            if js_check is not None:
+                return HarnessResult(
+                    case=case.name,
+                    category=case.category,
+                    passed=False,
+                    status="failed",
+                    detail=js_check,
+                )
+            if runtime_inputs is not None and expected_outputs is not None:
+                runtime_detail = _check_js_runtime(
+                    generated["js"],
+                    runtime_inputs,
+                    expected_outputs,
+                    output_tolerances=case.output_tolerances,
+                )
+                if runtime_detail is not None:
+                    return HarnessResult(
+                        case=case.name,
+                        category=case.category,
+                        passed=False,
+                        status="failed",
+                        detail=runtime_detail,
+                    )
+
+        if (
+            "python" in generated
+            and runtime_inputs is not None
+            and expected_outputs is not None
+        ):
+            runtime_detail = _check_python_runtime(
+                generated["python"],
+                runtime_inputs,
+                expected_outputs,
+                output_tolerances=case.output_tolerances,
+            )
+            if runtime_detail is not None:
+                return HarnessResult(
+                    case=case.name,
+                    category=case.category,
+                    passed=False,
+                    status="failed",
+                    detail=runtime_detail,
+                )
+
+        if (
+            "rust" in generated
+            and rustc_available
+            and runtime_inputs is not None
+            and expected_outputs is not None
+        ):
+            rust_input_kinds = {
+                compiled_input.name: compiled_input.value_kind
+                for compiled_input in lowered_program.inputs
+            }
+            runtime_detail = _check_rust_runtime(
+                generated["rust"],
+                runtime_inputs,
+                rust_input_kinds,
+                expected_outputs,
+                output_tolerances=case.output_tolerances,
+            )
+            if runtime_detail is not None:
+                return HarnessResult(
+                    case=case.name,
+                    category=case.category,
+                    passed=False,
+                    status="failed",
+                    detail=runtime_detail,
+                )
+
+        if "js" in generated and not node_available:
+            return HarnessResult(
+                case=case.name,
+                category=case.category,
+                passed=False,
+                status="skipped",
+                detail=(
+                    "Node.js is not available, so JavaScript validation was skipped "
+                    "for this case after Python checks passed."
+                ),
+            )
+
+        if "rust" in generated and not rustc_available:
+            return HarnessResult(
+                case=case.name,
+                category=case.category,
+                passed=False,
+                status="skipped",
+                detail=(
+                    "rustc is not available, so Rust validation was skipped "
+                    "for this case after JS/Python checks passed."
+                ),
+            )
+
+        return HarnessResult(
+            case=case.name,
+            category=case.category,
+            passed=True,
+            status="passed",
+            detail=case.description,
+        )
+    except ImportError as exc:
+        if case.external:
+            return HarnessResult(
+                case=case.name,
+                category=case.category,
+                passed=False,
+                status="skipped",
+                detail=str(exc),
+            )
+        return HarnessResult(
+            case=case.name,
+            category=case.category,
+            passed=False,
+            status="failed",
+            detail=str(exc),
+        )
+    except (CompilationError, ParameterBindingError) as exc:
+        if case.expected_error and case.expected_error in str(exc):
+            return HarnessResult(
+                case=case.name,
+                category=case.category,
+                passed=True,
+                status="passed",
+                detail=f"Failed as expected: {exc}",
+            )
+        return HarnessResult(
+            case=case.name,
+            category=case.category,
+            passed=False,
+            status="failed",
+            detail=str(exc),
+        )
+
+
+def _compile_target(case: HarnessCase, program, target: str) -> str:
+    """Compile one case to one target."""
+    if target == "js":
+        return program.to_js_generator().generate()
+    if target == "python":
+        return program.to_python_generator().generate()
+    if target == "rust":
+        return program.to_rust_generator().generate()
+    raise CompilationError(f"Unknown harness target '{target}'.")
+
+
+def _load_case_program(case: HarnessCase):
+    """Load a harness case as either one in-memory file or a file graph."""
+    if case.repo_entrypoint is not None:
+        return load_rac_program(_REPO_ROOT / case.repo_entrypoint)
+
+    if not case.supporting_files:
+        if case.rac is None:
+            raise CompilationError(
+                f"Harness case '{case.name}' does not define a RAC entrypoint."
+            )
+        return parse_rac(case.rac)
+
+    with tempfile.TemporaryDirectory(prefix="rac_compile_harness_") as tmp_dir:
+        root = Path(tmp_dir)
+        if case.rac is None:
+            raise CompilationError(
+                f"Harness case '{case.name}' does not define a RAC entrypoint."
+            )
+        (root / case.entrypoint).write_text(case.rac.strip() + "\n")
+        for relative_path, content in case.supporting_files.items():
+            target = root / relative_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content.strip() + "\n")
+        return load_rac_program(root / case.entrypoint)
+
+
+def _resolve_expected_outputs(case: HarnessCase) -> dict[str, Any] | None:
+    """Resolve expected outputs from literals or a reference oracle."""
+    if case.expected_outputs is not None:
+        return case.expected_outputs
+    if case.oracle is None:
+        return None
+    if case.inputs is None:
+        raise CompilationError(
+            f"Harness case '{case.name}' uses oracle '{case.oracle}' without inputs."
+        )
+    try:
+        oracle = _ORACLE_FUNCTIONS[case.oracle]
+    except KeyError as exc:
+        raise CompilationError(
+            f"Harness case '{case.name}' references unknown oracle '{case.oracle}'."
+        ) from exc
+    return oracle(case.inputs)
+
+
+def _check_batch_runtime(
+    program,
+    batch_inputs: dict[str, list[Any]],
+    expected_outputs: dict[str, list[Any]] | None,
+    output_tolerances: dict[str, float] | None = None,
+) -> str | None:
+    """Execute one lowered program in batch mode and compare outputs."""
+    if expected_outputs is None:
+        raise CompilationError("Batch harness case is missing expected_batch_outputs.")
+    result = execute_lowered_program_batch(program, pd.DataFrame(batch_inputs))
+    actual = result.to_dict(orient="list")
+    for name, expected_values in expected_outputs.items():
+        actual_values = actual.get(name)
+        if actual_values is None:
+            return f"Expected batch output '{name}', but it was missing."
+        if len(actual_values) != len(expected_values):
+            return (
+                f"Expected batch output {name} to have {len(expected_values)} rows, "
+                f"got {len(actual_values)}."
+            )
+        tolerance = (output_tolerances or {}).get(name)
+        for index, (actual_value, expected_value) in enumerate(
+            zip(actual_values, expected_values, strict=True)
+        ):
+            if tolerance is None:
+                if actual_value != expected_value:
+                    return (
+                        f"Expected batch output {name}[{index}]={expected_value!r}, "
+                        f"got {actual_value!r}."
+                    )
+            elif not _within_tolerance(actual_value, expected_value, tolerance):
+                return (
+                    f"Expected batch output {name}[{index}] within ±{tolerance!r} "
+                    f"of {expected_value!r}, got {actual_value!r}."
+                )
+    extra_names = set(actual) - set(expected_outputs)
+    if extra_names:
+        names = ", ".join(sorted(extra_names))
+        return f"Expected only requested batch outputs, but got extra values: {names}."
+    return None
+
+
+def _check_lowered_program(
+    program,
+    expected_outputs: dict[str, Any] | None,
+) -> str | None:
+    """Verify that the lowered bundle is serializable and internally consistent."""
+    payload = json.loads(program.to_json())
+    output_names = [output["name"] for output in payload["outputs"]]
+    if expected_outputs is not None and set(output_names) != set(expected_outputs):
+        return (
+            "Lowered bundle outputs did not match the expected public surface: "
+            f"{output_names}."
+        )
+
+    computation_names = {
+        computation["name"] for computation in payload["computations"]
+    }
+    for output in payload["outputs"]:
+        variable_name = output["variable_name"]
+        if variable_name not in computation_names:
+            return (
+                "Lowered bundle output references unknown computation "
+                f"'{variable_name}'."
+            )
+        if "value_kind" not in output:
+            return f"Lowered bundle output '{output['name']}' is missing value_kind."
+    for parameter in payload["parameters"]:
+        if "value_kind" not in parameter:
+            return (
+                "Lowered bundle parameter "
+                f"'{parameter['name']}' is missing value_kind."
+            )
+        if "lookup_kind" not in parameter:
+            return (
+                "Lowered bundle parameter "
+                f"'{parameter['name']}' is missing lookup_kind."
+            )
+        if (
+            parameter["lookup_kind"] == "indexed"
+            and "index_value_kind" not in parameter
+        ):
+            return (
+                "Lowered bundle parameter "
+                f"'{parameter['name']}' is missing index_value_kind."
+            )
+    for computation in payload["computations"]:
+        if "value_kind" not in computation:
+            return (
+                "Lowered bundle computation "
+                f"'{computation['name']}' is missing value_kind."
+            )
+        if "local_value_kinds" not in computation:
+            return (
+                "Lowered bundle computation "
+                f"'{computation['name']}' is missing local_value_kinds."
+            )
+        local_names = set(computation.get("local_names", []))
+        local_value_kinds = set(computation["local_value_kinds"])
+        if local_names != local_value_kinds:
+            return (
+                "Lowered bundle computation "
+                f"'{computation['name']}' has incomplete local_value_kinds."
+            )
+    return None
+
+
+def _oracle_eitc_reference(inputs: dict[str, Any]) -> dict[str, Any]:
+    """Calculate expected EITC outputs from the Python reference oracle."""
+    result = calculate_eitc(**inputs)
+    return {"eitc": result.eitc}
+
+
+def _oracle_ctc_reference(inputs: dict[str, Any]) -> dict[str, Any]:
+    """Calculate expected CTC/ACTC outputs from the Python reference oracles."""
+    ctc_result = calculate_ctc(
+        n_qualifying_children=inputs["n_qualifying_children"],
+        agi=inputs["agi"],
+        is_joint=inputs["is_joint"],
+    )
+    actc_result = calculate_actc(
+        n_qualifying_children=inputs["n_qualifying_children"],
+        earned_income=inputs["earned_income"],
+    )
+    return {"ctc": ctc_result.ctc, "actc": actc_result.actc}
+
+
+def _oracle_snap_reference(inputs: dict[str, Any]) -> dict[str, Any]:
+    """Calculate expected SNAP outputs from the Python reference oracle."""
+    result = calculate_snap_benefit(**inputs)
+    return {"snap_benefit": result.benefit}
+
+
+def _oracle_policyengine_snap_reference(inputs: dict[str, Any]) -> dict[str, Any]:
+    """Calculate expected SNAP outputs from a PolicyEngine household oracle."""
+    result = run_policyengine_household(
+        {
+            "gross_income": inputs["gross_income"],
+            "household_size": inputs["household_size"],
+            "state_code": inputs.get("state_code", "CA"),
+        }
+    )
+    return {"snap_benefit": result["pe_snap"]}
+
+
+_ORACLE_FUNCTIONS: dict[str, Any] = {
+    "eitc_reference": _oracle_eitc_reference,
+    "ctc_reference": _oracle_ctc_reference,
+    "snap_reference": _oracle_snap_reference,
+    "policyengine_snap_reference": _oracle_policyengine_snap_reference,
+}
+
+
+def _check_python_runtime(
+    code: str,
+    inputs: dict[str, Any],
+    expected_outputs: dict[str, Any],
+    output_tolerances: dict[str, float] | None = None,
+) -> str | None:
+    """Execute generated Python and compare expected outputs."""
+    namespace: dict[str, Any] = {}
+    exec(code, namespace)
+    result = namespace["calculate"](**inputs)
+    return _check_runtime_result(
+        result,
+        expected_outputs,
+        target="Python",
+        output_tolerances=output_tolerances,
+    )
+
+
+def _check_js_runtime(
+    code: str,
+    inputs: dict[str, Any],
+    expected_outputs: dict[str, Any],
+    output_tolerances: dict[str, float] | None = None,
+) -> str | None:
+    """Execute generated JavaScript and compare expected outputs."""
+    node = shutil.which("node")
+    if node is None:
+        return None
+
+    harness_code = "\n".join(
+        [
+            code,
+            f"const __harnessInputs = {json.dumps(inputs, sort_keys=True)};",
+            "const __harnessResult = calculate(__harnessInputs);",
+            "console.log(JSON.stringify(__harnessResult));",
+        ]
+    )
+    proc = subprocess.run(
+        [node, "--input-type=module"],
+        input=harness_code,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        return proc.stderr.strip() or "Generated JavaScript failed at runtime."
+
+    lines = [line for line in proc.stdout.splitlines() if line.strip()]
+    if not lines:
+        return "Generated JavaScript did not print a result."
+
+    try:
+        result = json.loads(lines[-1])
+    except json.JSONDecodeError:
+        return "Generated JavaScript returned non-JSON runtime output."
+
+    return _check_runtime_result(
+        result,
+        expected_outputs,
+        target="JS",
+        output_tolerances=output_tolerances,
+    )
+
+
+def _check_runtime_result(
+    result: dict[str, Any],
+    expected_outputs: dict[str, Any],
+    target: str,
+    output_tolerances: dict[str, float] | None = None,
+) -> str | None:
+    """Compare runtime outputs against the expected public result shape."""
+    for name, expected in expected_outputs.items():
+        actual = result.get(name)
+        tolerance = (output_tolerances or {}).get(name)
+        if tolerance is None:
+            if actual != expected:
+                return (
+                    f"Expected {target} output {name}={expected!r}, got {actual!r}."
+                )
+            continue
+        if not _within_tolerance(actual, expected, tolerance):
+            return (
+                f"Expected {target} output {name} within ±{tolerance!r} of "
+                f"{expected!r}, got {actual!r}."
+            )
+    extra_names = set(result) - set(expected_outputs) - {"citations"}
+    if extra_names:
+        names = ", ".join(sorted(extra_names))
+        return (
+            "Expected only requested outputs, but got extra values: "
+            f"{names}."
+        )
+    return None
+
+
+def _check_rust_runtime(
+    code: str,
+    inputs: dict[str, Any],
+    input_value_kinds: dict[str, str],
+    expected_outputs: dict[str, Any],
+    output_tolerances: dict[str, float] | None = None,
+) -> str | None:
+    """Compile and execute generated Rust and compare expected outputs."""
+    rustc = shutil.which("rustc")
+    if rustc is None:
+        return None
+
+    with tempfile.TemporaryDirectory(prefix="rac_compile_rust_") as tmp_dir:
+        root = Path(tmp_dir)
+        source = root / "main.rs"
+        binary = root / "calculator"
+        source.write_text(
+            "\n".join(
+                [
+                    code,
+                    "",
+                    "fn main() {",
+                    "    let result = calculate(CalculateInputs {",
+                    *[
+                        _format_rust_input_binding(name, value, input_value_kinds)
+                        for name, value in inputs.items()
+                    ],
+                    "        ..Default::default()",
+                    "    });",
+                    "    for (name, value) in result.outputs.iter() {",
+                    '        println!("{}={:?}", name, value);',
+                    "    }",
+                    "}",
+                ]
+            )
+        )
+        compile_proc = subprocess.run(
+            _rustc_compile_command(rustc, source, binary),
+            capture_output=True,
+            text=True,
+        )
+        if compile_proc.returncode != 0:
+            return compile_proc.stderr.strip() or "Generated Rust failed to compile."
+
+        run_proc = subprocess.run(
+            [str(binary)],
+            capture_output=True,
+            text=True,
+        )
+        if run_proc.returncode != 0:
+            return run_proc.stderr.strip() or "Generated Rust failed at runtime."
+
+    result: dict[str, Any] = {}
+    for line in run_proc.stdout.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            name, raw_value = stripped.split("=", 1)
+        except ValueError:
+            return "Generated Rust returned malformed runtime output."
+        parsed_value = _parse_rust_runtime_value(raw_value)
+        if parsed_value is None:
+            return f"Generated Rust returned unsupported runtime value {raw_value!r}."
+        result[name] = parsed_value
+    return _check_runtime_result(
+        result,
+        expected_outputs,
+        target="Rust",
+        output_tolerances=output_tolerances,
+    )
+
+
+def _within_tolerance(actual: Any, expected: Any, tolerance: float) -> bool:
+    """Check whether one runtime value is within a numeric tolerance."""
+    if isinstance(actual, bool) or isinstance(expected, bool):
+        return actual == expected
+    if not isinstance(actual, int | float) or not isinstance(expected, int | float):
+        return actual == expected
+    return abs(float(actual) - float(expected)) <= tolerance
+
+
+def _check_js_syntax(code: str) -> str | None:
+    """Check generated JS syntax when Node.js is available."""
+    node = shutil.which("node")
+    if node is None:
+        return None
+    proc = subprocess.run(
+        [node, "--input-type=module", "--check"],
+        input=code,
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        return proc.stderr.strip() or "Generated JavaScript has invalid syntax."
+    return None
+
+
+def _has_node_runtime() -> bool:
+    """Return whether Node.js is available for JavaScript validation."""
+    return shutil.which("node") is not None
+
+
+def _has_rustc_runtime() -> bool:
+    """Return whether rustc is available for Rust validation."""
+    return shutil.which("rustc") is not None
+
+
+def _render_rust_input_literal(value: Any, value_kind: str) -> str:
+    """Render one harness input value to Rust syntax."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value_kind == "integer":
+        if isinstance(value, bool):
+            raise CompilationError(
+                f"Rust harness does not support boolean integer input {value!r}."
+            )
+        if isinstance(value, (int, float)) and float(value).is_integer():
+            return str(int(value))
+        raise CompilationError(
+            "Rust harness expected exact integer input for kind "
+            f"'integer', got {value!r}."
+        )
+    if isinstance(value, (int, float)):
+        rendered = repr(float(value))
+        if "e" not in rendered and "." not in rendered:
+            rendered += ".0"
+        return rendered
+    raise CompilationError(
+        f"Rust harness does not support non-scalar input value {value!r}."
+    )
+
+
+def _format_rust_input_binding(
+    name: str,
+    value: Any,
+    input_value_kinds: dict[str, str],
+) -> str:
+    """Render one Rust input struct field assignment for harness execution."""
+    return (
+        "        "
+        f"{name}: "
+        f"{_render_rust_input_literal(value, input_value_kinds.get(name, 'number'))},"
+    )
+
+
+def _parse_rust_runtime_value(raw_value: str) -> Any | None:
+    """Parse one debug-printed Rust runtime value."""
+    if raw_value == "Bool(true)":
+        return True
+    if raw_value == "Bool(false)":
+        return False
+    if raw_value.startswith("Integer(") and raw_value.endswith(")"):
+        inner = raw_value[len("Integer(") : -1]
+        try:
+            return int(inner)
+        except ValueError:
+            return None
+    if raw_value.startswith("Number(") and raw_value.endswith(")"):
+        inner = raw_value[len("Number(") : -1]
+        try:
+            return float(inner)
+        except ValueError:
+            return None
+    if raw_value.startswith('String("') and raw_value.endswith('")'):
+        return raw_value[len('String("') : -2]
+    return None
+
+
+def _rustc_compile_command(rustc: str, source: Path, binary: Path) -> list[str]:
+    """Build a rustc compile command with a stable system linker when available."""
+    command = [rustc, "--edition=2021", str(source), "-o", str(binary)]
+    system_linker = Path("/usr/bin/cc")
+    if system_linker.exists():
+        command[1:1] = ["-C", f"linker={system_linker}"]
+    return command

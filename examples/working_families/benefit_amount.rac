@@ -1,0 +1,19 @@
+# Example Working Families Act § 102
+
+source:
+  citation: "Example Working Families Act § 102"
+  accessed: 2025-01-01
+
+import "./base_amount.rac" as base
+
+export from "./base_amount.rac" import base_amount
+export benefit as benefit_amount
+
+benefit:
+  entity: TaxUnit
+  period: Year
+  dtype: Money
+  label: "Working Families Benefit"
+  from 2025-01-01:
+    eligible_amount = has_qualifying_child ? base.base_amount : 0
+    return round(max(0, eligible_amount))

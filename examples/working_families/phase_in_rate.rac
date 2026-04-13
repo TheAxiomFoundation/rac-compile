@@ -1,0 +1,10 @@
+# Example Working Families Act § 101(a)
+
+source:
+  citation: "Example Working Families Act § 101(a)"
+  accessed: 2025-01-01
+
+export rate
+
+rate:
+  source: "example/working_families/phase_in_rate"

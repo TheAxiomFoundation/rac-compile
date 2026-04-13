@@ -1,14 +1,22 @@
-"""Parser for RAC DSL files (.rac and legacy .cos).
-
-Supports legacy .cos brace syntax and unified .rac v3 temporal syntax.
-"""
+"""Parser for RAC DSL files."""
 
 import re
 import textwrap
 from dataclasses import dataclass, field
-from typing import Optional
+from datetime import date
+from pathlib import Path
+from typing import Any, Optional
 
-from .js_generator import JSCodeGenerator
+from .parameter_bindings import (
+    ParameterBinding,
+    ParameterBindingError,
+    ParameterBundle,
+    normalize_parameter_overrides,
+)
+
+
+class ParserError(ValueError):
+    """Raised when a RAC file cannot be parsed safely."""
 
 
 @dataclass
@@ -29,16 +37,56 @@ class TemporalEntry:
     code: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class ImportSpec:
+    """One top-level file import."""
+
+    path: str
+    alias: str | None = None
+    symbols: tuple["ImportSymbolSpec", ...] = ()
+
+
+@dataclass(frozen=True)
+class ImportSymbolSpec:
+    """One imported symbol, with an optional local alias."""
+
+    name: str
+    alias: str | None = None
+
+
+@dataclass(frozen=True)
+class ExportSpec:
+    """One exported symbol, with an optional public alias."""
+
+    name: str
+    alias: str | None = None
+
+    @property
+    def public_name(self) -> str:
+        """Return the exported public name."""
+        return self.alias or self.name
+
+
+@dataclass(frozen=True)
+class ReExportSpec:
+    """One exported symbol list forwarded from another module."""
+
+    path: str
+    symbols: tuple[ImportSymbolSpec, ...] = ()
+
+
 @dataclass
 class ParameterDef:
     """Parsed parameter definition."""
 
+    symbol_name: str = ""
     source: str = ""
     values: dict[int, float] = field(default_factory=dict)
     temporal: list[TemporalEntry] = field(default_factory=list)
     description: Optional[str] = None
     unit: Optional[str] = None
     reference: Optional[str] = None
+    module_identity: str = ""
 
 
 @dataclass
@@ -46,12 +94,17 @@ class VariableBlock:
     """Parsed variable block."""
 
     name: str
+    symbol_name: str = ""
     entity: Optional[str] = None
     period: Optional[str] = None
     dtype: Optional[str] = None
     label: Optional[str] = None
     formula: str = ""
     temporal: list[TemporalEntry] = field(default_factory=list)
+    source_citation: str = ""
+    unqualified_bindings: dict[str, str] = field(default_factory=dict)
+    qualified_bindings: dict[str, dict[str, str]] = field(default_factory=dict)
+    module_identity: str = ""
 
     @property
     def effective_formula(self) -> str:
@@ -66,92 +119,242 @@ class VariableBlock:
 
 @dataclass
 class RacFile:
-    """Parsed .rac or .cos file."""
+    """Parsed .rac file."""
 
     source: Optional[SourceBlock] = None
     statute_text: Optional[str] = None
+    imports: list[str] = field(default_factory=list)
+    import_specs: list[ImportSpec] = field(default_factory=list)
+    exports: list[str] = field(default_factory=list)
+    export_specs: list[ExportSpec] = field(default_factory=list)
+    re_export_specs: list[ReExportSpec] = field(default_factory=list)
     parameters: dict[str, ParameterDef] = field(default_factory=dict)
     variables: list[VariableBlock] = field(default_factory=list)
+    origin: Path | None = None
+    module_identity: str = ""
 
-    def to_js_generator(self) -> JSCodeGenerator:
-        """Convert to JSCodeGenerator for JS output."""
-        gen = JSCodeGenerator()
-        citation = self.source.citation if self.source else None
+    @property
+    def resolved_module_identity(self) -> str:
+        """Return the stable rule/module identity for this file."""
+        return self.module_identity or _derive_module_identity(self.origin)
 
-        for name, param_def in self.parameters.items():
-            values = param_def.values or {0: 0}
-            gen.add_parameter(name, values, param_def.source)
+    def resolve_output_bindings(
+        self,
+        outputs: list[str] | None = None,
+    ) -> tuple[list[str], list[tuple[str, str]]]:
+        """Resolve requested outputs to internal names plus public bindings."""
+        from .compile_model import CompilationError
 
-        for var in self.variables:
-            formula = var.effective_formula
-            inputs = self._extract_inputs(formula)
-            for inp in inputs:
-                if inp not in gen.inputs:
-                    gen.add_input(inp, 0)
+        variable_names = [variable.name for variable in self.variables]
+        variable_set = set(variable_names)
+        symbol_names = variable_set | set(self.parameters)
 
-            gen.add_variable(
-                name=var.name,
-                inputs=inputs,
-                formula_js=self._formula_to_js(formula),
-                label=var.label or "",
-                citation=citation or "",
+        if self.export_specs:
+            exported_bindings: dict[str, str] = {}
+            ordered_public_names: list[str] = []
+            for export_spec in self.export_specs:
+                if export_spec.name not in symbol_names:
+                    raise CompilationError(
+                        f"File exports unknown symbol '{export_spec.name}'."
+                    )
+                if export_spec.name not in variable_set:
+                    continue
+                public_name = export_spec.public_name
+                existing = exported_bindings.get(public_name)
+                if existing is not None and existing != export_spec.name:
+                    raise CompilationError(
+                        f"File exports public name '{public_name}' more than once."
+                    )
+                if existing is None:
+                    ordered_public_names.append(public_name)
+                exported_bindings[public_name] = export_spec.name
+
+            if not exported_bindings:
+                raise CompilationError(
+                    "This file exports no variables. Export at least one variable "
+                    "to compile a public output."
+                )
+
+            requested_public = _ordered_unique(outputs or ordered_public_names)
+            unknown = [
+                name for name in requested_public if name not in exported_bindings
+            ]
+            if unknown:
+                names = ", ".join(unknown)
+                raise CompilationError(
+                    f"Unknown exported output variable(s): {names}."
+                )
+            return [
+                exported_bindings[public_name] for public_name in requested_public
+            ], [
+                (public_name, exported_bindings[public_name])
+                for public_name in requested_public
+            ]
+
+        requested_internal = _ordered_unique(outputs or variable_names)
+        unknown = [name for name in requested_internal if name not in variable_set]
+        if unknown:
+            names = ", ".join(unknown)
+            raise CompilationError(f"Unknown output variable(s): {names}.")
+        return requested_internal, [
+            (internal_name, internal_name) for internal_name in requested_internal
+        ]
+
+    def resolve_parameter_overrides(
+        self,
+        parameter_overrides: dict[str, Any] | ParameterBundle | None = None,
+    ) -> dict[str, ParameterBinding]:
+        """Resolve external bindings against internal parameter names safely."""
+        normalized = normalize_parameter_overrides(parameter_overrides)
+        if not normalized:
+            return {}
+
+        exact_names = set(self.parameters)
+        qualified_targets: dict[str, str] = {}
+        bare_targets: dict[str, list[str]] = {}
+        available_targets: dict[str, tuple[str, str]] = {}
+        for internal_name, parameter in self.parameters.items():
+            symbol_name = parameter.symbol_name or internal_name
+            bare_targets.setdefault(symbol_name, []).append(internal_name)
+            available_targets[internal_name] = (
+                parameter.module_identity,
+                symbol_name,
+            )
+            if parameter.module_identity:
+                qualified_targets[
+                    f"{parameter.module_identity}.{symbol_name}"
+                ] = internal_name
+
+        resolved: dict[str, ParameterBinding] = {}
+        for requested_name, binding in normalized.items():
+            internal_name = _resolve_parameter_binding_name(
+                requested_name,
+                exact_names=exact_names,
+                qualified_targets=qualified_targets,
+                bare_targets=bare_targets,
+                available_targets=available_targets,
+            )
+            existing = resolved.get(internal_name)
+            if existing is None:
+                resolved[internal_name] = binding
+            else:
+                values = dict(existing.values)
+                values.update(binding.values)
+                resolved[internal_name] = ParameterBinding(
+                    values=values,
+                    source=binding.source or existing.source,
+                    description=binding.description or existing.description,
+                    unit=binding.unit or existing.unit,
+                    reference=binding.reference or existing.reference,
+                )
+        return resolved
+
+    def to_compile_model(
+        self,
+        effective_date: date | str | None = None,
+        parameter_overrides: dict[str, Any] | ParameterBundle | None = None,
+        outputs: list[str] | None = None,
+    ):
+        """Convert to the shared compile model for generic compilation."""
+        from .compile_model import CompilationError, CompileContext, CompiledModule
+        from .program import load_rac_program
+
+        if self.imports or self.re_export_specs:
+            if self.origin is None:
+                raise CompilationError(
+                    "This RAC file imports other files. Load it from disk with "
+                    "load_rac_program() or parse it with an origin path."
+                )
+            return load_rac_program(self.origin).to_compile_model(
+                effective_date=effective_date,
+                parameter_overrides=parameter_overrides,
+                outputs=outputs,
             )
 
-        return gen
+        selected_outputs, public_output_bindings = self.resolve_output_bindings(outputs)
+        return CompiledModule.from_rac_file(
+            self,
+            compile_context=CompileContext(
+                effective_date=_normalize_effective_date(effective_date),
+                parameter_overrides=self.resolve_parameter_overrides(
+                    parameter_overrides
+                ),
+            ),
+            selected_outputs=selected_outputs,
+        ).with_public_outputs(public_output_bindings)
 
-    _COMMON_INPUTS = [
-        "income",
-        "earned_income",
-        "agi",
-        "wages",
-        "gross_income",
-        "net_income",
-        "tax_liability",
-        "n_children",
-        "num_children",
-        "n_qualifying_children",
-        "household_size",
-        "family_size",
-        "is_joint",
-        "is_married",
-        "filing_status",
-    ]
+    def to_lowered_program(
+        self,
+        effective_date: date | str | None = None,
+        parameter_overrides: dict[str, Any] | ParameterBundle | None = None,
+        outputs: list[str] | None = None,
+    ):
+        """Convert to a serializable lowered program bundle."""
+        return self.to_compile_model(
+            effective_date=effective_date,
+            parameter_overrides=parameter_overrides,
+            outputs=outputs,
+        ).to_lowered_program()
 
-    def _extract_inputs(self, formula: str) -> list[str]:
-        """Extract likely input variable names from formula."""
-        return [inp for inp in self._COMMON_INPUTS if inp in formula]
+    def to_js_generator(
+        self,
+        effective_date: date | str | None = None,
+        parameter_overrides: dict[str, Any] | ParameterBundle | None = None,
+        outputs: list[str] | None = None,
+    ):
+        """Convert to JSCodeGenerator for JS output."""
+        return self.to_compile_model(
+            effective_date=effective_date,
+            parameter_overrides=parameter_overrides,
+            outputs=outputs,
+        ).to_js_generator()
 
-    def _formula_to_js(self, formula: str) -> str:
-        """Convert formula DSL to JavaScript."""
-        js = textwrap.dedent(formula).strip()
-        js = re.sub(r"^let\s+", "const ", js, flags=re.MULTILINE)
-        js = re.sub(r"#\s*", "// ", js)
+    def to_python_generator(
+        self,
+        effective_date: date | str | None = None,
+        parameter_overrides: dict[str, Any] | ParameterBundle | None = None,
+        outputs: list[str] | None = None,
+    ):
+        """Convert to PythonCodeGenerator for Python output."""
+        return self.to_compile_model(
+            effective_date=effective_date,
+            parameter_overrides=parameter_overrides,
+            outputs=outputs,
+        ).to_python_generator()
 
-        for func in ("min", "max", "round", "floor", "ceil", "abs"):
-            js = re.sub(rf"\b{func}\(", f"Math.{func}(", js)
+    def to_rust_generator(
+        self,
+        effective_date: date | str | None = None,
+        parameter_overrides: dict[str, Any] | ParameterBundle | None = None,
+        outputs: list[str] | None = None,
+    ):
+        """Convert to RustCodeGenerator for Rust output."""
+        return self.to_compile_model(
+            effective_date=effective_date,
+            parameter_overrides=parameter_overrides,
+            outputs=outputs,
+        ).to_rust_generator()
 
-        for param_name in self.parameters:
-            js = re.sub(rf"\b{param_name}\[", f"PARAMS.{param_name}[", js)
 
-        if "\n" in js or "const " in js:
-            lines = js.split("\n")
-            indented = "\n".join(f"    {line}" for line in lines)
-            js = f"(() => {{\n{indented}\n  }})()"
-
-        return js
-
-
-CosFile = RacFile
-
+_IMPORT_PATTERN = re.compile(
+    r'^import\s+["\']([^"\']+)["\'](?:\s+as\s+([A-Za-z_]\w*))?\s*$'
+)
+_SELECTIVE_IMPORT_PATTERN = re.compile(
+    r'^from\s+["\']([^"\']+)["\']\s+import\s+(.+)$'
+)
+_RE_EXPORT_PATTERN = re.compile(
+    r'^export\s+from\s+["\']([^"\']+)["\']\s+import\s+(.+)$'
+)
+_EXPORT_PATTERN = re.compile(r"^export\s+(.+)$")
 _DATE_PATTERN = re.compile(r"^from\s+(\d{4}-\d{2}-\d{2})\s*:\s*$")
 _DATE_SCALAR_PATTERN = re.compile(
     r"^from\s+(\d{4}-\d{2}-\d{2})\s*:\s*(-?\d+(?:\.\d+)?)\s*$"
 )
 
 
-def parse_rac(content: str) -> RacFile:
-    """Parse .rac or .cos file content into a RacFile."""
-    result = RacFile()
+def parse_rac(content: str, origin: Path | str | None = None) -> RacFile:
+    """Parse .rac file content into a RacFile."""
+    result = RacFile(origin=Path(origin).resolve() if origin is not None else None)
 
     lines = content.split("\n")
     i = 0
@@ -184,38 +387,72 @@ def parse_rac(content: str) -> RacFile:
             i += 1
             continue
 
-        if stripped.startswith("source") and "{" in stripped:
-            block_lines = []
-            i += 1
-            while i < len(lines) and lines[i].strip() != "}":
-                block_lines.append(lines[i])
-                i += 1
-            result.source = _parse_source_block("\n".join(block_lines))
+        if stripped == "source:":
+            i, result.source = _parse_source_definition(lines, i + 1)
             i += 1
             continue
 
-        if stripped.startswith("parameters") and "{" in stripped:
-            block_lines = []
-            i += 1
-            while i < len(lines) and lines[i].strip() != "}":
-                block_lines.append(lines[i])
-                i += 1
-            result.parameters = _parse_parameters_block("\n".join(block_lines))
+        if (
+            stripped.startswith("source {")
+            or stripped.startswith("parameters {")
+            or re.match(r"parameter\s+\w+\s*\{", stripped)
+            or re.match(r"variable\s+\w+\s*\{", stripped)
+        ):
+            raise ParserError(
+                "Legacy brace syntax is no longer supported. Rewrite this file "
+                "using .rac blocks such as 'source:' and 'name:'."
+            )
+
+        import_match = _IMPORT_PATTERN.match(stripped)
+        if import_match:
+            import_path = import_match.group(1)
+            import_alias = import_match.group(2)
+            result.imports.append(import_path)
+            result.import_specs.append(
+                ImportSpec(path=import_path, alias=import_alias)
+            )
             i += 1
             continue
 
-        legacy_param = re.match(r"parameter\s+(\w+)\s*\{", stripped)
-        if legacy_param:
-            name = legacy_param.group(1)
-            i, body = _collect_brace_block(lines, i + 1)
-            result.parameters[name] = _parse_parameter_block(name, body)
+        selective_import_match = _SELECTIVE_IMPORT_PATTERN.match(stripped)
+        if selective_import_match:
+            import_path = selective_import_match.group(1)
+            try:
+                symbols = _parse_import_symbol_list(selective_import_match.group(2))
+            except ValueError as exc:
+                raise ParserError(str(exc)) from exc
+            result.imports.append(import_path)
+            result.import_specs.append(
+                ImportSpec(path=import_path, symbols=tuple(symbols))
+            )
+            i += 1
             continue
 
-        legacy_var = re.match(r"variable\s+(\w+)\s*\{", stripped)
-        if legacy_var:
-            name = legacy_var.group(1)
-            i, body = _collect_brace_block(lines, i + 1)
-            result.variables.append(_parse_variable_block(name, body))
+        re_export_match = _RE_EXPORT_PATTERN.match(stripped)
+        if re_export_match:
+            export_path = re_export_match.group(1)
+            try:
+                symbols = _parse_import_symbol_list(re_export_match.group(2))
+            except ValueError as exc:
+                raise ParserError(str(exc)) from exc
+            result.re_export_specs.append(
+                ReExportSpec(path=export_path, symbols=tuple(symbols))
+            )
+            result.exports.extend(symbol.alias or symbol.name for symbol in symbols)
+            i += 1
+            continue
+
+        export_match = _EXPORT_PATTERN.match(stripped)
+        if export_match:
+            try:
+                export_specs = _parse_export_list(export_match.group(1))
+            except ValueError as exc:
+                raise ParserError(str(exc)) from exc
+            result.export_specs.extend(export_specs)
+            result.exports.extend(
+                export_spec.public_name for export_spec in export_specs
+            )
+            i += 1
             continue
 
         unified_match = re.match(r"^(\w+)\s*:\s*$", line)
@@ -231,21 +468,152 @@ def parse_rac(content: str) -> RacFile:
 
         i += 1
 
+    module_identity = result.resolved_module_identity
+    result.module_identity = module_identity
+    source_citation = result.source.citation if result.source else ""
+    for name, parameter in result.parameters.items():
+        if not parameter.symbol_name:
+            parameter.symbol_name = name
+        if not parameter.module_identity:
+            parameter.module_identity = module_identity
+    for variable in result.variables:
+        if not variable.symbol_name:
+            variable.symbol_name = variable.name
+        if not variable.module_identity:
+            variable.module_identity = module_identity
+        if not variable.source_citation:
+            variable.source_citation = source_citation
+
     return result
 
 
-def _collect_brace_block(lines: list[str], start: int) -> tuple[int, str]:
-    """Collect lines inside a brace-delimited block, handling nesting."""
-    block_lines = []
-    brace_depth = 1
+def _derive_module_identity(origin: Path | None) -> str:
+    """Derive one rule/module identity from the file leaf name."""
+    if origin is None:
+        return ""
+    return origin.stem
+
+
+def _resolve_parameter_binding_name(
+    requested_name: str,
+    *,
+    exact_names: set[str],
+    qualified_targets: dict[str, str],
+    bare_targets: dict[str, list[str]],
+    available_targets: dict[str, tuple[str, str]],
+) -> str:
+    """Resolve a user-facing parameter binding target to one internal name."""
+    if requested_name in exact_names:
+        return requested_name
+    if requested_name in qualified_targets:
+        return qualified_targets[requested_name]
+
+    candidates = bare_targets.get(requested_name, [])
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        qualified = ", ".join(
+            sorted(
+                f"{available_targets[name][0]}.{available_targets[name][1]}"
+                for name in candidates
+            )
+        )
+        raise ParameterBindingError(
+            f"Parameter binding target '{requested_name}' is ambiguous across "
+            f"multiple modules: {qualified}. Use module_identity.symbol."
+        )
+
+    available_names = set(exact_names) | set(qualified_targets)
+    available_names.update(
+        name for name, matched in bare_targets.items() if len(matched) == 1
+    )
+    available = ", ".join(sorted(available_names)) or "none"
+    raise ParameterBindingError(
+        f"Unknown parameter binding target '{requested_name}'. Available targets: "
+        f"{available}."
+    )
+
+
+def _normalize_effective_date(value: date | str | None) -> date | None:
+    """Normalize an optional effective date argument."""
+    if value is None or isinstance(value, date):
+        return value
+    return date.fromisoformat(value)
+
+
+def _parse_import_symbol_list(value: str) -> list[ImportSymbolSpec]:
+    """Parse `name` and `name as alias` entries from a selective import."""
+    symbols: list[ImportSymbolSpec] = []
+    for item in value.split(","):
+        stripped = item.strip()
+        if not stripped:
+            continue
+        match = re.fullmatch(
+            r"([A-Za-z_]\w*)(?:\s+as\s+([A-Za-z_]\w*))?",
+            stripped,
+        )
+        if match is None:
+            raise ValueError(f"Invalid selective import item '{stripped}'.")
+        symbols.append(ImportSymbolSpec(name=match.group(1), alias=match.group(2)))
+    if not symbols:
+        raise ValueError("Selective imports must name at least one symbol.")
+    return symbols
+
+
+def _parse_export_list(value: str) -> list[ExportSpec]:
+    """Parse a comma-separated export declaration."""
+    names: list[ExportSpec] = []
+    for item in value.split(","):
+        stripped = item.strip()
+        if not stripped:
+            continue
+        match = re.fullmatch(
+            r"([A-Za-z_]\w*)(?:\s+as\s+([A-Za-z_]\w*))?",
+            stripped,
+        )
+        if match is None:
+            raise ValueError(f"Invalid export name '{stripped}'.")
+        names.append(ExportSpec(name=match.group(1), alias=match.group(2)))
+    if not names:
+        raise ValueError("Export declarations must name at least one symbol.")
+    return names
+
+
+def _ordered_unique(names: list[str]) -> list[str]:
+    """Return names in first-seen order with duplicates removed."""
+    return list(dict.fromkeys(names))
+
+
+def _collect_indented_block(lines: list[str], start: int) -> tuple[int, str]:
+    """Collect one indented block and return the next unread line index."""
+    block_lines: list[str] = []
+    block_indent: int | None = None
     i = start
-    while i < len(lines) and brace_depth > 0:
+
+    while i < len(lines):
         line = lines[i]
-        brace_depth += line.count("{") - line.count("}")
-        if brace_depth > 0:
-            block_lines.append(line)
+        stripped = line.strip()
+        if not stripped:
+            if block_indent is not None:
+                block_lines.append("")
+            i += 1
+            continue
+
+        indent = len(line) - len(line.lstrip())
+        if block_indent is None:
+            if indent == 0:
+                break
+            block_indent = indent
+        elif indent < block_indent:
+            break
+
+        block_lines.append(line)
         i += 1
-    return i, "\n".join(block_lines)
+
+    while block_lines and not block_lines[-1].strip():
+        block_lines.pop()
+
+    return i, textwrap.dedent("\n".join(block_lines)).strip()
 
 
 def _parse_unified_definition(
@@ -257,6 +625,7 @@ def _parse_unified_definition(
     """
     attrs: dict[str, str] = {}
     temporal: list[TemporalEntry] = []
+    values: dict[int, float] = {}
     i = start
 
     while i < len(lines):
@@ -288,6 +657,10 @@ def _parse_unified_definition(
             temporal.append(entry)
             continue
 
+        if stripped == "values:":
+            i, values = _parse_values_block(lines, i + 1)
+            continue
+
         attr_match = re.match(r"(\w+)\s*:\s*(.+)", stripped)
         if attr_match:
             attrs[attr_match.group(1)] = attr_match.group(2).strip().strip('"')
@@ -297,22 +670,35 @@ def _parse_unified_definition(
         i += 1
 
     if any(k in attrs for k in ("entity", "period", "dtype", "formula")):
+        if values:
+            raise ParserError(
+                f"Variable '{name}' cannot define a parameter values block."
+            )
         return i, VariableBlock(
             name=name,
+            symbol_name=name,
             entity=attrs.get("entity"),
             period=attrs.get("period"),
             dtype=attrs.get("dtype"),
             label=attrs.get("label"),
+            formula=attrs.get("formula", ""),
             temporal=temporal,
         )
 
+    if values and temporal:
+        raise ParserError(
+            f"Parameter '{name}' cannot mix a values block with temporal entries."
+        )
+
     return i, ParameterDef(
+        symbol_name=name,
         source=attrs.get("source", attrs.get("reference", "")),
         description=attrs.get("description"),
         unit=attrs.get("unit"),
         reference=attrs.get("reference"),
         temporal=temporal,
-        values={
+        values=values
+        or {
             idx: entry.value
             for idx, entry in enumerate(temporal)
             if entry.value is not None
@@ -324,39 +710,12 @@ def _collect_temporal_block(
     date: str, lines: list[str], start: int
 ) -> tuple[int, TemporalEntry]:
     """Collect an indented code block under a 'from date:' line."""
-    code_lines = []
-    code_indent = None
-    i = start
-
-    while i < len(lines):
-        code_line = lines[i]
-        if not code_line.strip():
-            code_lines.append("")
-            i += 1
-            continue
-
-        if code_indent is None:
-            code_indent = len(code_line) - len(code_line.lstrip())
-
-        if len(code_line) - len(code_line.lstrip()) < code_indent:
-            break
-
-        code_lines.append(code_line)
-        i += 1
-
-    while code_lines and not code_lines[-1].strip():
-        code_lines.pop()
-
-    code = textwrap.dedent("\n".join(code_lines)).strip()
+    i, code = _collect_indented_block(lines, start)
 
     try:
         return i, TemporalEntry(from_date=date, value=float(code))
     except ValueError:
         return i, TemporalEntry(from_date=date, code=code)
-
-
-# Backward compatibility alias
-parse_cos = parse_rac
 
 
 def _parse_source_block(content: str) -> SourceBlock:
@@ -382,73 +741,35 @@ def _parse_source_block(content: str) -> SourceBlock:
     return source
 
 
-def _parse_parameters_block(content: str) -> dict[str, ParameterDef]:
-    """Parse parameters block content (simple key: source format)."""
-    params = {}
+def _parse_source_definition(
+    lines: list[str], start: int
+) -> tuple[int, SourceBlock]:
+    """Parse a top-level `source:` block."""
+    i, block = _collect_indented_block(lines, start)
+    if not block:
+        raise ParserError("source: block must contain at least one field.")
+    return i - 1, _parse_source_block(block)
 
-    for line in content.split("\n"):
-        line = line.strip()
-        if not line or line.startswith("#"):
+
+def _parse_values_block(lines: list[str], start: int) -> tuple[int, dict[int, float]]:
+    """Parse an indented parameter values block."""
+    i, block = _collect_indented_block(lines, start)
+    if not block:
+        raise ParserError("values: block must contain at least one indexed value.")
+
+    values: dict[int, float] = {}
+    for line in block.split("\n"):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
             continue
-        if "#" in line:
-            line = line.split("#")[0].strip()
+        match = re.fullmatch(r"(\d+)\s*:\s*(-?\d+(?:\.\d+)?)", stripped)
+        if match is None:
+            raise ParserError(
+                f"Invalid parameter values entry '{stripped}'. Use INDEX: NUMBER."
+            )
+        values[int(match.group(1))] = float(match.group(2))
 
-        if ":" in line:
-            key, value = line.split(":", 1)
-            params[key.strip()] = ParameterDef(source=value.strip())
+    if not values:
+        raise ParserError("values: block must contain at least one indexed value.")
 
-    return params
-
-
-def _parse_parameter_block(name: str, content: str) -> ParameterDef:
-    """Parse a single parameter block with source and values."""
-    param = ParameterDef()
-
-    values_match = re.search(r"values\s*\{([^}]+)\}", content, re.DOTALL)
-    if values_match:
-        for line in values_match.group(1).split("\n"):
-            line = line.strip()
-            if not line or line.startswith("#") or ":" not in line:
-                continue
-            key, value = line.split(":", 1)
-            try:
-                param.values[int(key.strip())] = float(value.strip())
-            except ValueError:
-                pass
-
-    source_match = re.search(r'source:\s*"([^"]+)"', content)
-    if not source_match:
-        source_match = re.search(r"source:\s*(\S+)", content)
-    if source_match:
-        param.source = source_match.group(1)
-
-    return param
-
-
-def _parse_variable_block(name: str, content: str) -> VariableBlock:
-    """Parse variable block content."""
-    var = VariableBlock(name=name)
-
-    formula_match = re.search(r"formula\s*\{(.*)\}", content, re.DOTALL)
-    if formula_match:
-        var.formula = textwrap.dedent(formula_match.group(1)).strip()
-
-    pre_formula = content[: formula_match.start()] if formula_match else content
-
-    for line in pre_formula.split("\n"):
-        line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-
-        if line.startswith("entity "):
-            var.entity = line.split(" ", 1)[1].strip()
-        elif line.startswith("period "):
-            var.period = line.split(" ", 1)[1].strip()
-        elif line.startswith("dtype "):
-            var.dtype = line.split(" ", 1)[1].strip()
-        elif line.startswith("label "):
-            label_match = re.search(r'label\s+"([^"]+)"', line)
-            if label_match:
-                var.label = label_match.group(1)
-
-    return var
+    return i, values

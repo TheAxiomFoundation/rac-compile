@@ -5,11 +5,13 @@ all branches: compile (success, file-not-found, stdout), eitc (JS, Python,
 to file, to stdout), no-command.
 """
 
+import json
 from unittest.mock import patch
 
 import pytest
 
 from src.rac_compile.cli import main
+from src.rac_compile.harness import HarnessResult, HarnessSummary
 
 
 class TestCLIMainCompile:
@@ -25,12 +27,15 @@ class TestCLIMainCompile:
 
     def test_compile_to_stdout(self, tmp_path):
         """Compile with no -o prints JS to stdout."""
-        input_file = tmp_path / "test.cos"
+        input_file = tmp_path / "test.rac"
         input_file.write_text(
             """
-variable x {
-  formula { return 42 }
-}
+x:
+  entity: Person
+  period: Year
+  dtype: Integer
+  from 2024-01-01:
+    return 42
 """
         )
         with patch("sys.argv", ["rac-compile", "compile", str(input_file)]):
@@ -43,12 +48,15 @@ variable x {
 
     def test_compile_to_file(self, tmp_path):
         """Compile with -o writes JS to file."""
-        input_file = tmp_path / "test.cos"
+        input_file = tmp_path / "test.rac"
         input_file.write_text(
             """
-variable x {
-  formula { return 42 }
-}
+x:
+  entity: Person
+  period: Year
+  dtype: Integer
+  from 2024-01-01:
+    return 42
 """
         )
         output_file = tmp_path / "output.js"
@@ -60,6 +68,1170 @@ variable x {
             assert output_file.exists()
             content = output_file.read_text()
             assert "calculate" in content
+
+    def test_compile_python_to_stdout(self, tmp_path):
+        """Compile --python prints Python to stdout."""
+        input_file = tmp_path / "test.rac"
+        input_file.write_text(
+            """
+rate:
+  source: "Test"
+  from 2024-01-01: 0.2
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+"""
+        )
+        with patch(
+            "sys.argv",
+            ["rac-compile", "compile", str(input_file), "--python"],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                output = mock_print.call_args_list[0][0][0]
+                assert "def calculate(" in output
+
+    def test_compile_rust_to_stdout(self, tmp_path):
+        """Compile --rust prints Rust to stdout."""
+        input_file = tmp_path / "test.rac"
+        input_file.write_text(
+            """
+rate:
+  source: "Test"
+  from 2024-01-01: 0.2
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+"""
+        )
+        with patch(
+            "sys.argv",
+            ["rac-compile", "compile", str(input_file), "--rust"],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                output = mock_print.call_args_list[0][0][0]
+                assert "pub fn calculate" in output
+
+    def test_compile_effective_date_resolves_temporal_entries(self, tmp_path):
+        """Compile can resolve temporal RAC definitions with --effective-date."""
+        input_file = tmp_path / "test.rac"
+        input_file.write_text(
+            """
+rate:
+  source: "Test"
+  from 2024-01-01: 0.2
+  from 2025-01-01: 0.25
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+"""
+        )
+        with patch(
+            "sys.argv",
+            [
+                "rac-compile",
+                "compile",
+                str(input_file),
+                "--python",
+                "--effective-date",
+                "2025-06-01",
+            ],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                output = mock_print.call_args_list[0][0][0]
+                assert "0.25" in output
+
+    def test_compile_parameter_binding_supplies_source_only_parameter(self, tmp_path):
+        """Compile can bind source-only parameters from the CLI."""
+        input_file = tmp_path / "test.rac"
+        input_file.write_text(
+            """
+rate:
+  source: "external/rate"
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+"""
+        )
+        with patch(
+            "sys.argv",
+            [
+                "rac-compile",
+                "compile",
+                str(input_file),
+                "--python",
+                "--parameter",
+                "rate=0.25",
+            ],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                output = mock_print.call_args_list[0][0][0]
+                assert "0.25" in output
+
+    def test_compile_parameter_file_supplies_source_only_parameter(self, tmp_path):
+        """Compile can bind source-only parameters from a JSON file."""
+        input_file = tmp_path / "test.rac"
+        parameter_file = tmp_path / "bindings.json"
+        input_file.write_text(
+            """
+rate:
+  source: "external/rate"
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+"""
+        )
+        parameter_file.write_text(json.dumps({"rate": 0.4}))
+        with patch(
+            "sys.argv",
+            [
+                "rac-compile",
+                "compile",
+                str(input_file),
+                "--python",
+                "--parameter-file",
+                str(parameter_file),
+            ],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                output = mock_print.call_args_list[0][0][0]
+                assert "0.4" in output
+
+    def test_compile_supports_qualified_parameter_binding_for_imported_param(
+        self, tmp_path
+    ):
+        """CLI bindings can target imported source-only params by module identity."""
+        (tmp_path / "shared.rac").write_text(
+            """
+rate:
+  source: "external/rate"
+"""
+        )
+        input_file = tmp_path / "benefit_amount.rac"
+        input_file.write_text(
+            """
+import "./shared.rac"
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+"""
+        )
+        with patch(
+            "sys.argv",
+            [
+                "rac-compile",
+                "compile",
+                str(input_file),
+                "--python",
+                "--parameter",
+                "shared.rate=0.25",
+            ],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                output = mock_print.call_args_list[0][0][0]
+                assert "0.25" in output
+
+    def test_compile_structured_parameter_file_supplies_metadata(self, tmp_path):
+        """Compile accepts the structured parameter bundle schema."""
+        input_file = tmp_path / "test.rac"
+        parameter_file = tmp_path / "bindings.json"
+        input_file.write_text(
+            """
+rate:
+  source: "external/rate"
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+"""
+        )
+        parameter_file.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "metadata": {"name": "TY2025 bundle"},
+                    "parameters": {
+                        "rate": {
+                            "value": 0.4,
+                            "source": "bundle://ty2025",
+                        }
+                    },
+                }
+            )
+        )
+        with patch(
+            "sys.argv",
+            [
+                "rac-compile",
+                "compile",
+                str(input_file),
+                "--python",
+                "--parameter-file",
+                str(parameter_file),
+            ],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                output = mock_print.call_args_list[0][0][0]
+                assert "external/rate [bound from bundle://ty2025]" in output
+
+    def test_compile_parameter_cli_overrides_parameter_file(self, tmp_path):
+        """Inline parameter bindings override file-backed values."""
+        input_file = tmp_path / "test.rac"
+        parameter_file = tmp_path / "bindings.json"
+        input_file.write_text(
+            """
+rate:
+  source: "external/rate"
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+"""
+        )
+        parameter_file.write_text(json.dumps({"rate": 0.2}))
+        with patch(
+            "sys.argv",
+            [
+                "rac-compile",
+                "compile",
+                str(input_file),
+                "--python",
+                "--parameter-file",
+                str(parameter_file),
+                "--parameter",
+                "rate=0.33",
+            ],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                output = mock_print.call_args_list[0][0][0]
+                assert "0.33" in output
+
+    def test_compile_ambiguous_bare_parameter_binding_exits_1(self, tmp_path):
+        """Ambiguous bare parameter bindings fail with a user-facing error."""
+        (tmp_path / "left.rac").write_text(
+            """
+rate:
+  source: "left-rate"
+"""
+        )
+        (tmp_path / "right.rac").write_text(
+            """
+rate:
+  source: "right-rate"
+"""
+        )
+        input_file = tmp_path / "benefit_amount.rac"
+        input_file.write_text(
+            """
+import "./left.rac"
+import "./right.rac"
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages
+"""
+        )
+        with patch(
+            "sys.argv",
+            [
+                "rac-compile",
+                "compile",
+                str(input_file),
+                "--python",
+                "--parameter",
+                "rate=0.25",
+            ],
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 1
+
+    def test_compile_supports_dotted_module_identity_parameter_binding(self, tmp_path):
+        """Qualified parameter bindings accept dotted leaf identities."""
+        (tmp_path / "shared.v1.rac").write_text(
+            """
+rate:
+  source: "shared-rate"
+"""
+        )
+        input_file = tmp_path / "benefit_amount.rac"
+        input_file.write_text(
+            """
+import "./shared.v1.rac"
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+"""
+        )
+        with patch(
+            "sys.argv",
+            [
+                "rac-compile",
+                "compile",
+                str(input_file),
+                "--python",
+                "--parameter",
+                "shared.v1.rate=0.25",
+            ],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                output = mock_print.call_args_list[0][0][0]
+                assert '"param": "shared_v1_rate"' in output
+                assert '"module_identity": "shared.v1"' in output
+
+    def test_compile_missing_source_only_parameter_binding_exits_1(self, tmp_path):
+        """Referenced source-only parameters must be bound explicitly."""
+        input_file = tmp_path / "test.rac"
+        input_file.write_text(
+            """
+rate:
+  source: "external/rate"
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+"""
+        )
+        with patch("sys.argv", ["rac-compile", "compile", str(input_file)]):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 1
+
+    def test_compile_if_else_formula_to_python(self, tmp_path):
+        """Limited if/else formulas compile through the CLI."""
+        input_file = tmp_path / "test.rac"
+        input_file.write_text(
+            """
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    if is_joint:
+      rate = 0.1
+    else:
+      rate = 0.2
+    return wages * rate
+"""
+        )
+        with patch(
+            "sys.argv",
+            ["rac-compile", "compile", str(input_file), "--python"],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                output = mock_print.call_args_list[0][0][0]
+                assert "if is_joint:" in output
+                assert "return wages * rate" in output
+
+    def test_compile_select_output_prunes_return_shape(self, tmp_path):
+        """CLI output selection returns only the requested variable."""
+        input_file = tmp_path / "test.rac"
+        input_file.write_text(
+            """
+rate:
+  source: "Test"
+  from 2024-01-01: 0.1
+
+taxable_income:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages - deduction
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return taxable_income * rate
+
+bonus:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * 0.5
+"""
+        )
+        with patch(
+            "sys.argv",
+            [
+                "rac-compile",
+                "compile",
+                str(input_file),
+                "--python",
+                "--select-output",
+                "tax",
+            ],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                namespace = {}
+                exec(mock_print.call_args_list[0][0][0], namespace)
+                result = namespace["calculate"](wages=1000, deduction=100)
+                assert result["tax"] == 90
+                assert "taxable_income" not in result
+                assert "bonus" not in result
+
+    def test_compile_resolves_local_file_imports(self, tmp_path):
+        """CLI compile loads local imported RAC files before code generation."""
+        shared = tmp_path / "shared.rac"
+        shared.write_text(
+            """
+rate:
+  source: "shared-rate"
+  from 2024-01-01: 0.1
+
+taxable_income:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages - deduction
+"""
+        )
+        input_file = tmp_path / "main.rac"
+        input_file.write_text(
+            """
+import "./shared.rac"
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return taxable_income * rate
+"""
+        )
+        with patch(
+            "sys.argv",
+            ["rac-compile", "compile", str(input_file), "--python"],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                namespace = {}
+                exec(mock_print.call_args_list[0][0][0], namespace)
+                result = namespace["calculate"](wages=1000, deduction=100)
+                assert result["tax"] == 90
+
+    def test_compile_resolves_aliased_imports(self, tmp_path):
+        """CLI compile supports module-qualified references through import aliases."""
+        (tmp_path / "left.rac").write_text(
+            """
+rate:
+  source: "left-rate"
+  from 2024-01-01: 0.1
+"""
+        )
+        (tmp_path / "right.rac").write_text(
+            """
+rate:
+  source: "right-rate"
+  from 2024-01-01: 0.2
+"""
+        )
+        input_file = tmp_path / "main.rac"
+        input_file.write_text(
+            """
+import "./left.rac" as left
+import "./right.rac" as right
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * left.rate + wages * right.rate
+"""
+        )
+        with patch(
+            "sys.argv",
+            ["rac-compile", "compile", str(input_file), "--python"],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                namespace = {}
+                exec(mock_print.call_args_list[0][0][0], namespace)
+                assert namespace["calculate"](wages=100)["tax"] == 30
+
+    def test_compile_supports_selective_imports_from_explicit_exports(self, tmp_path):
+        """CLI compile binds selected exported names without a whole-module import."""
+        (tmp_path / "shared.rac").write_text(
+            """
+export rate_public, taxable_income
+
+rate_public:
+  source: "shared-rate"
+  from 2024-01-01: 0.1
+
+hidden_rate:
+  source: "hidden-rate"
+  from 2024-01-01: 0.2
+
+taxable_income:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages - deduction
+"""
+        )
+        input_file = tmp_path / "main.rac"
+        input_file.write_text(
+            """
+from "./shared.rac" import rate_public as rate, taxable_income
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return taxable_income * rate
+"""
+        )
+        with patch(
+            "sys.argv",
+            ["rac-compile", "compile", str(input_file), "--python"],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                namespace = {}
+                exec(mock_print.call_args_list[0][0][0], namespace)
+                assert namespace["calculate"](wages=1000, deduction=100)["tax"] == 90
+
+    def test_compile_export_aliases_define_public_output_names(self, tmp_path):
+        """CLI compile returns aliased public outputs instead of internal names."""
+        input_file = tmp_path / "main.rac"
+        input_file.write_text(
+            """
+export tax as benefit_amount
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * 0.1
+"""
+        )
+        with patch(
+            "sys.argv",
+            ["rac-compile", "compile", str(input_file), "--python"],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                namespace = {}
+                exec(mock_print.call_args_list[0][0][0], namespace)
+                result = namespace["calculate"](wages=100)
+                assert result["benefit_amount"] == 10
+                assert "tax" not in result
+
+    def test_compile_select_output_uses_public_export_alias(self, tmp_path):
+        """CLI selected outputs follow the exported public interface."""
+        input_file = tmp_path / "main.rac"
+        input_file.write_text(
+            """
+export tax as benefit_amount
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * 0.1
+
+bonus:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * 0.5
+"""
+        )
+        with patch(
+            "sys.argv",
+            [
+                "rac-compile",
+                "compile",
+                str(input_file),
+                "--python",
+                "--select-output",
+                "benefit_amount",
+            ],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                namespace = {}
+                exec(mock_print.call_args_list[0][0][0], namespace)
+                assert namespace["calculate"](wages=100) == {
+                    "benefit_amount": 10,
+                    "citations": [],
+                }
+
+    def test_compile_supports_module_re_exports(self, tmp_path):
+        """CLI compile resolves re-exported symbols through intermediate modules."""
+        (tmp_path / "base.rac").write_text(
+            """
+export private_rate as rate
+
+private_rate:
+  source: "base-rate"
+  from 2024-01-01: 0.1
+"""
+        )
+        (tmp_path / "surface.rac").write_text(
+            """
+export from "./base.rac" import rate
+"""
+        )
+        input_file = tmp_path / "main.rac"
+        input_file.write_text(
+            """
+from "./surface.rac" import rate
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+"""
+        )
+        with patch(
+            "sys.argv",
+            ["rac-compile", "compile", str(input_file), "--python"],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                namespace = {}
+                exec(mock_print.call_args_list[0][0][0], namespace)
+                assert namespace["calculate"](wages=100)["tax"] == 10
+
+    def test_compile_supports_module_roots_for_bare_imports(self, tmp_path):
+        """CLI compile resolves bare imports through repeated --module-root flags."""
+        shared = tmp_path / "lib" / "tax" / "shared.rac"
+        shared.parent.mkdir(parents=True, exist_ok=True)
+        shared.write_text(
+            """
+export private_rate as rate
+
+private_rate:
+  source: "base-rate"
+  from 2024-01-01: 0.1
+"""
+        )
+        input_file = tmp_path / "main.rac"
+        input_file.write_text(
+            """
+from "tax/shared.rac" import rate
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+"""
+        )
+        with patch(
+            "sys.argv",
+            [
+                "rac-compile",
+                "compile",
+                str(input_file),
+                "--python",
+                "--module-root",
+                str(tmp_path / "lib"),
+            ],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                namespace = {}
+                exec(mock_print.call_args_list[0][0][0], namespace)
+                assert namespace["calculate"](wages=100)["tax"] == 10
+
+    def test_compile_supports_cli_package_aliases(self, tmp_path):
+        """CLI compile resolves package-prefixed imports through --package."""
+        shared = tmp_path / "packages" / "tax" / "shared.rac"
+        shared.parent.mkdir(parents=True, exist_ok=True)
+        shared.write_text(
+            """
+export private_rate as rate
+
+private_rate:
+  source: "base-rate"
+  from 2024-01-01: 0.1
+"""
+        )
+        input_file = tmp_path / "main.rac"
+        input_file.write_text(
+            """
+from "tax/shared.rac" import rate
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+"""
+        )
+        with patch(
+            "sys.argv",
+            [
+                "rac-compile",
+                "compile",
+                str(input_file),
+                "--python",
+                "--package",
+                f"tax={tmp_path / 'packages' / 'tax'}",
+            ],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                namespace = {}
+                exec(mock_print.call_args_list[0][0][0], namespace)
+                assert namespace["calculate"](wages=100)["tax"] == 10
+
+    def test_compile_malformed_rac_toml_exits_1(self, tmp_path):
+        """Malformed rac.toml config still surfaces as a normal CLI error."""
+        (tmp_path / "rac.toml").write_text("[module_resolution\nroots = [\"./lib\"]\n")
+        input_file = tmp_path / "main.rac"
+        input_file.write_text(
+            """
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * 0.1
+"""
+        )
+        with patch("sys.argv", ["rac-compile", "compile", str(input_file)]):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 1
+
+    def test_compile_unknown_selected_output_exits_1(self, tmp_path):
+        """Selecting a missing output variable surfaces a user-facing error."""
+        input_file = tmp_path / "test.rac"
+        input_file.write_text(
+            """
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * 0.1
+"""
+        )
+        with patch(
+            "sys.argv",
+            [
+                "rac-compile",
+                "compile",
+                str(input_file),
+                "--select-output",
+                "bonus",
+            ],
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 1
+
+    def test_compile_unsupported_construct_exits_1(self, tmp_path):
+        """Unsupported generic compilation surfaces a user-facing error."""
+        input_file = tmp_path / "test.rac"
+        input_file.write_text(
+            """
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    while wages > 0:
+      return wages
+"""
+        )
+        with patch("sys.argv", ["rac-compile", "compile", str(input_file)]):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 1
+
+
+class TestCLIMainLower:
+    """Test lower command branches."""
+
+    def test_lower_to_stdout_emits_pruned_lowered_json(self, tmp_path):
+        """lower emits a serializable selected-output bundle to stdout."""
+        input_file = tmp_path / "policy.rac"
+        input_file.write_text(
+            """
+rate:
+  source: "Test"
+  from 2024-01-01: 0.1
+
+taxable_income:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages - deduction
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return taxable_income * rate
+
+bonus:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * 0.5
+"""
+        )
+        with patch(
+            "sys.argv",
+            [
+                "rac-compile",
+                "lower",
+                str(input_file),
+                "--select-output",
+                "tax",
+            ],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                payload = json.loads(mock_print.call_args_list[0][0][0])
+
+        assert [output["name"] for output in payload["outputs"]] == ["tax"]
+        assert [computation["name"] for computation in payload["computations"]] == [
+            "taxable_income",
+            "tax",
+        ]
+
+    def test_compile_missing_return_path_exits_1(self, tmp_path):
+        """Control flow without a total return still fails loudly."""
+        input_file = tmp_path / "test.rac"
+        input_file.write_text(
+            """
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    if wages > 0:
+      return wages
+"""
+        )
+        with patch("sys.argv", ["rac-compile", "compile", str(input_file)]):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 1
+
+    def test_compile_unsupported_function_call_exits_1(self, tmp_path):
+        """Unknown helper calls fail loudly instead of generating bad code."""
+        input_file = tmp_path / "test.rac"
+        input_file.write_text(
+            """
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return custom_credit(wages)
+"""
+        )
+        with patch("sys.argv", ["rac-compile", "compile", str(input_file)]):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 1
+
+    def test_compile_invalid_effective_date_exits_2(self, tmp_path):
+        """Invalid effective dates are rejected by argparse."""
+        input_file = tmp_path / "test.rac"
+        input_file.write_text(
+            """
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return 1
+"""
+        )
+        with patch(
+            "sys.argv",
+            [
+                "rac-compile",
+                "compile",
+                str(input_file),
+                "--effective-date",
+                "2025-99-99",
+            ],
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 2
+
+    def test_compile_invalid_parameter_binding_exits_2(self, tmp_path):
+        """Invalid parameter binding syntax is rejected by argparse."""
+        input_file = tmp_path / "test.rac"
+        input_file.write_text(
+            """
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return 1
+"""
+        )
+        with patch(
+            "sys.argv",
+            [
+                "rac-compile",
+                "compile",
+                str(input_file),
+                "--parameter",
+                "rate[bad]=x",
+            ],
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 2
+
+    def test_compile_invalid_parameter_file_exits_1(self, tmp_path):
+        """Invalid parameter files surface a user-facing error."""
+        input_file = tmp_path / "test.rac"
+        parameter_file = tmp_path / "bindings.json"
+        input_file.write_text(
+            """
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return 1
+"""
+        )
+        parameter_file.write_text("{bad json")
+        with patch(
+            "sys.argv",
+            [
+                "rac-compile",
+                "compile",
+                str(input_file),
+                "--parameter-file",
+                str(parameter_file),
+            ],
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 1
+
+    def test_compile_malformed_parameter_binding_file_exits_1(self, tmp_path):
+        """Malformed nested binding dicts surface a user-facing error."""
+        input_file = tmp_path / "test.rac"
+        parameter_file = tmp_path / "bindings.json"
+        input_file.write_text(
+            """
+rate:
+  source: "external/rate"
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+"""
+        )
+        parameter_file.write_text(json.dumps({"rate": {"schema_version": 1}}))
+        with patch(
+            "sys.argv",
+            [
+                "rac-compile",
+                "compile",
+                str(input_file),
+                "--parameter-file",
+                str(parameter_file),
+            ],
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 1
+
+    def test_compile_malformed_parameter_list_file_exits_1(self, tmp_path):
+        """Malformed list binding payloads surface a user-facing error."""
+        input_file = tmp_path / "test.rac"
+        parameter_file = tmp_path / "bindings.json"
+        input_file.write_text(
+            """
+rate:
+  source: "external/rate"
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+"""
+        )
+        parameter_file.write_text(json.dumps({"rate": [1, "x"]}))
+        with patch(
+            "sys.argv",
+            [
+                "rac-compile",
+                "compile",
+                str(input_file),
+                "--parameter-file",
+                str(parameter_file),
+            ],
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 1
+
+
+class TestCLIMainHarness:
+    """Test harness command branches."""
+
+    def test_harness_to_stdout(self):
+        """harness outputs a human-readable scorecard."""
+        with patch("sys.argv", ["rac-compile", "harness"]):
+            with patch("builtins.print") as mock_print:
+                main()
+                output = mock_print.call_args_list[0][0][0]
+                assert "Compiler harness score:" in output
+
+    def test_harness_json_to_stdout(self):
+        """harness --json outputs machine-readable summary JSON."""
+        with patch(
+            "sys.argv",
+            ["rac-compile", "harness", "--json", "--case", "basic_straight_line"],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                output = mock_print.call_args_list[0][0][0]
+                assert '"score": "1/1"' in output
+
+    def test_harness_include_external_flag_is_forwarded(self):
+        """harness --include-external forwards the opt-in external flag."""
+        summary = HarnessSummary(
+            total=1,
+            passed=1,
+            failed=0,
+            skipped=0,
+            by_category={
+                "policyengine": {"total": 1, "passed": 1, "failed": 0, "skipped": 0}
+            },
+            results=[
+                HarnessResult(
+                    case="policyengine_snap_example",
+                    category="policyengine",
+                    passed=True,
+                    status="passed",
+                    detail="Compiled SNAP stays within tolerance.",
+                )
+            ],
+        )
+        with patch(
+            "src.rac_compile.cli.run_compiler_harness",
+            return_value=summary,
+        ) as mock_run:
+            with patch("sys.argv", ["rac-compile", "harness", "--include-external"]):
+                with patch("builtins.print"):
+                    main()
+        mock_run.assert_called_once_with(case_names=None, include_external=True)
+
+    def test_harness_unknown_case_exits_1(self):
+        """Unknown harness case names are rejected."""
+        with patch(
+            "sys.argv",
+            ["rac-compile", "harness", "--case", "does_not_exist"],
+        ):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 1
+
+    def test_harness_skipped_case_exits_1(self):
+        """Skipped harness runs fail the CLI gate."""
+        summary = HarnessSummary(
+            total=1,
+            passed=0,
+            failed=0,
+            skipped=1,
+            by_category={"core": {"total": 1, "passed": 0, "failed": 0, "skipped": 1}},
+            results=[
+                HarnessResult(
+                    case="basic_straight_line",
+                    category="core",
+                    passed=False,
+                    status="skipped",
+                    detail="Node.js is not available.",
+                )
+            ],
+        )
+        with patch("src.rac_compile.cli.run_compiler_harness", return_value=summary):
+            with patch("sys.argv", ["rac-compile", "harness"]):
+                with pytest.raises(SystemExit) as exc_info:
+                    main()
+                assert exc_info.value.code == 1
 
 
 class TestCLIMainEitc:

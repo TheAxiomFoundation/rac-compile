@@ -1,11 +1,11 @@
 """
 Validation tests: Compiled JS output vs Python reference implementations.
 
-These tests ensure that compiled .cos files produce the same results
+These tests ensure that compiled .rac files produce the same results
 as the Python reference implementations.
 
 Test strategy:
-1. Compile .cos file to JS
+1. Compile .rac file to JS
 2. Run both Python and JS with same inputs
 3. Verify outputs match exactly
 """
@@ -23,7 +23,7 @@ from src.rac_compile.calculators import (
     calculate_eitc,
     calculate_snap_benefit,
 )
-from src.rac_compile.parser import parse_cos
+from src.rac_compile.parser import parse_rac
 
 
 def run_js_calculator(js_code: str, inputs: dict) -> dict:
@@ -73,11 +73,11 @@ class TestEITCJSvsPython:
 
     @pytest.fixture
     def eitc_js_code(self):
-        """Load and compile EITC .cos file."""
-        eitc_path = Path(__file__).parent.parent / "examples" / "eitc.cos"
+        """Load and compile EITC .rac file."""
+        eitc_path = Path(__file__).parent.parent / "examples" / "eitc.rac"
         content = eitc_path.read_text()
-        cos_file = parse_cos(content)
-        gen = cos_file.to_js_generator()
+        rac_file = parse_rac(content)
+        gen = rac_file.to_js_generator()
         return gen.generate()
 
     # Test cases covering different scenarios
@@ -130,11 +130,11 @@ class TestCTCJSvsPython:
 
     @pytest.fixture
     def ctc_js_code(self):
-        """Load and compile CTC .cos file."""
-        ctc_path = Path(__file__).parent.parent / "examples" / "ctc.cos"
+        """Load and compile CTC .rac file."""
+        ctc_path = Path(__file__).parent.parent / "examples" / "ctc.rac"
         content = ctc_path.read_text()
-        cos_file = parse_cos(content)
-        gen = cos_file.to_js_generator()
+        rac_file = parse_rac(content)
+        gen = rac_file.to_js_generator()
         return gen.generate()
 
     CASES = [
@@ -186,11 +186,11 @@ class TestSNAPJSvsPython:
 
     @pytest.fixture
     def snap_js_code(self):
-        """Load and compile SNAP .cos file."""
-        snap_path = Path(__file__).parent.parent / "examples" / "snap.cos"
+        """Load and compile SNAP .rac file."""
+        snap_path = Path(__file__).parent.parent / "examples" / "snap.rac"
         content = snap_path.read_text()
-        cos_file = parse_cos(content)
-        gen = cos_file.to_js_generator()
+        rac_file = parse_rac(content)
+        gen = rac_file.to_js_generator()
         return gen.generate()
 
     CASES = [
@@ -234,10 +234,10 @@ class TestCitationChainPreserved:
 
     def test_eitc_citations_in_js(self):
         """EITC JS output includes all citations."""
-        eitc_path = Path(__file__).parent.parent / "examples" / "eitc.cos"
+        eitc_path = Path(__file__).parent.parent / "examples" / "eitc.rac"
         content = eitc_path.read_text()
-        cos_file = parse_cos(content)
-        gen = cos_file.to_js_generator()
+        rac_file = parse_rac(content)
+        gen = rac_file.to_js_generator()
         js_code = gen.generate()
 
         js_result = run_js_calculator(js_code, {"earned_income": 10000})
