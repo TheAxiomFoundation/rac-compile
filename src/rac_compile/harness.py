@@ -26,6 +26,7 @@ from .program import load_rac_program
 from .validation import ComparisonConfig, run_policyengine_household
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_WORKSPACE_ROOT = _REPO_ROOT.parent
 
 
 @dataclass(frozen=True)
@@ -39,17 +40,22 @@ class HarnessCase:
     supporting_files: dict[str, str] = field(default_factory=dict)
     entrypoint: str = "main.rac"
     repo_entrypoint: str | None = None
+    workspace_entrypoint: str | None = None
     targets: tuple[str, ...] = ("js", "python", "rust")
     effective_date: str | None = None
     parameter_overrides: dict[str, Any] | None = None
     outputs: list[str] | None = None
     inputs: dict[str, Any] | None = None
+    expected_input_names: list[str] | None = None
+    forbidden_input_names: list[str] | None = None
+    expected_output_module_identities: dict[str, str] | None = None
     expected_outputs: dict[str, Any] | None = None
     batch_inputs: dict[str, list[Any]] | None = None
     expected_batch_outputs: dict[str, list[Any]] | None = None
     output_tolerances: dict[str, float] | None = None
     oracle: str | None = None
     external: bool = False
+    live: bool = False
     expected_error: str | None = None
 
 
@@ -563,6 +569,57 @@ tax:
         oracle="policyengine_snap_reference",
         external=True,
     ),
+    HarnessCase(
+        name="live_rac_us_input_variable_support",
+        category="live_stack",
+        description=(
+            "Real rac-us files should treat defaulted no-formula variables as public "
+            "inputs instead of unsupported computations."
+        ),
+        workspace_entrypoint="rac-us/statute/26/24/c/2.rac",
+        outputs=["ctc_meets_citizenship_requirement"],
+        expected_input_names=["is_us_citizen_national_or_resident"],
+        expected_output_module_identities={
+            "ctc_meets_citizenship_requirement": "statute/26/24/c/2"
+        },
+        targets=(),
+        live=True,
+    ),
+    HarnessCase(
+        name="live_rac_us_citation_identity",
+        category="live_stack",
+        description=(
+            "Real rac-us files should preserve statute citation paths as module "
+            "identity in the lowered bundle."
+        ),
+        workspace_entrypoint="rac-us/statute/26/21/a/2/A.rac",
+        outputs=["first_reduction"],
+        expected_output_module_identities={
+            "first_reduction": "statute/26/21/a/2/A"
+        },
+        targets=(),
+        live=True,
+    ),
+    HarnessCase(
+        name="live_rac_us_import_graph_resolution",
+        category="live_stack",
+        description=(
+            "Real rac-us imported computed rules should resolve through the file graph "
+            "instead of surfacing as free lowered inputs."
+        ),
+        workspace_entrypoint="rac-us/statute/26/32/32.rac",
+        outputs=["earned_income_credit"],
+        forbidden_input_names=[
+            "eitc_amount",
+            "eitc_denied_for_excess_investment_income",
+            "meets_full_taxable_year_requirement",
+        ],
+        expected_output_module_identities={
+            "earned_income_credit": "statute/26/32/32"
+        },
+        targets=(),
+        live=True,
+    ),
 )
 
 
@@ -570,9 +627,14 @@ def run_compiler_harness(
     case_names: list[str] | None = None,
     *,
     include_external: bool = False,
+    include_live: bool = False,
 ) -> HarnessSummary:
     """Run the objective compiler harness."""
-    selected_cases = _select_cases(case_names, include_external=include_external)
+    selected_cases = _select_cases(
+        case_names,
+        include_external=include_external,
+        include_live=include_live,
+    )
     results = [_run_case(case) for case in selected_cases]
     by_category: dict[str, dict[str, int]] = {}
     for result in results:
@@ -632,11 +694,15 @@ def _select_cases(
     case_names: list[str] | None,
     *,
     include_external: bool = False,
+    include_live: bool = False,
 ) -> list[HarnessCase]:
     """Select a subset of harness cases by name."""
     if case_names is None:
         return [
-            case for case in HARNESS_CASES if include_external or not case.external
+            case
+            for case in HARNESS_CASES
+            if (include_external or not case.external)
+            and (include_live or not case.live)
         ]
 
     available = {case.name: case for case in HARNESS_CASES}
@@ -659,6 +725,7 @@ def _run_case(case: HarnessCase) -> HarnessResult:
         )
         lowered_detail = _check_lowered_program(
             lowered_program,
+            case=case,
             expected_outputs=expected_outputs,
         )
         if lowered_detail is not None:
@@ -813,7 +880,7 @@ def _run_case(case: HarnessCase) -> HarnessResult:
             detail=case.description,
         )
     except ImportError as exc:
-        if case.external:
+        if case.external or case.live:
             return HarnessResult(
                 case=case.name,
                 category=case.category,
@@ -861,6 +928,13 @@ def _load_case_program(case: HarnessCase):
     """Load a harness case as either one in-memory file or a file graph."""
     if case.repo_entrypoint is not None:
         return load_rac_program(_REPO_ROOT / case.repo_entrypoint)
+    if case.workspace_entrypoint is not None:
+        path = _WORKSPACE_ROOT / case.workspace_entrypoint
+        if not path.exists():
+            raise ImportError(
+                f"Workspace harness case '{case.name}' requires {path}."
+            )
+        return load_rac_program(path)
 
     if not case.supporting_files:
         if case.rac is None:
@@ -946,16 +1020,46 @@ def _check_batch_runtime(
 
 def _check_lowered_program(
     program,
+    *,
+    case: HarnessCase,
     expected_outputs: dict[str, Any] | None,
 ) -> str | None:
     """Verify that the lowered bundle is serializable and internally consistent."""
     payload = json.loads(program.to_json())
+    input_names = [compiled_input["name"] for compiled_input in payload["inputs"]]
+    if case.expected_input_names is not None and set(input_names) != set(
+        case.expected_input_names
+    ):
+        return (
+            "Lowered bundle inputs did not match the expected public input surface: "
+            f"{input_names}."
+        )
+    if case.forbidden_input_names:
+        forbidden = sorted(set(input_names) & set(case.forbidden_input_names))
+        if forbidden:
+            return (
+                "Lowered bundle exposed imported live symbols as free inputs: "
+                f"{', '.join(forbidden)}."
+            )
+
     output_names = [output["name"] for output in payload["outputs"]]
     if expected_outputs is not None and set(output_names) != set(expected_outputs):
         return (
             "Lowered bundle outputs did not match the expected public surface: "
             f"{output_names}."
         )
+    if case.expected_output_module_identities:
+        output_identities = {
+            output["name"]: output.get("module_identity", "")
+            for output in payload["outputs"]
+        }
+        for name, expected_identity in case.expected_output_module_identities.items():
+            actual_identity = output_identities.get(name)
+            if actual_identity != expected_identity:
+                return (
+                    f"Lowered bundle output '{name}' had module_identity "
+                    f"{actual_identity!r}, expected {expected_identity!r}."
+                )
 
     computation_names = {
         computation["name"] for computation in payload["computations"]

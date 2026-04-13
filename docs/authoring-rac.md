@@ -12,12 +12,13 @@ A `.rac` file is made of:
 - variable definitions
 - optional imports / exports
 
-Name modules by the subsection leaf they encode. Avoid generic entrypoint names
-like `main.rac`.
+For canonical RAC trees, use citation paths like `statute/26/32/c/2/A.rac` or
+`regulation/...`. Avoid generic entrypoint names like `main.rac`.
 
-The compiler uses that leaf name as the module/rule identity in merged graphs,
-lowered bundles, and generated citation metadata. Within one loaded program,
-those leaf identities must be unique.
+The compiler uses canonical `statute/...`, `regulation/...`, or
+`legislation/...` paths as module/rule identity in merged graphs, lowered
+bundles, and generated citation metadata. For ad hoc files outside those roots,
+it falls back to the file leaf name.
 
 For real policy work, author RAC as checked-in `.rac` files with rule citations
 and source metadata in the file itself. Do not treat RAC as an ad hoc embedded

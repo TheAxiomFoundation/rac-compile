@@ -99,6 +99,8 @@ class VariableBlock:
     period: Optional[str] = None
     dtype: Optional[str] = None
     label: Optional[str] = None
+    default: Any = None
+    import_specs: list[ImportSpec] = field(default_factory=list)
     formula: str = ""
     temporal: list[TemporalEntry] = field(default_factory=list)
     source_citation: str = ""
@@ -147,6 +149,12 @@ class RacFile:
 
         variable_names = [variable.name for variable in self.variables]
         variable_set = set(variable_names)
+        output_variable_names = [
+            variable.name
+            for variable in self.variables
+            if variable.effective_formula.strip()
+        ]
+        output_variable_set = set(output_variable_names)
         symbol_names = variable_set | set(self.parameters)
 
         if self.export_specs:
@@ -157,8 +165,12 @@ class RacFile:
                     raise CompilationError(
                         f"File exports unknown symbol '{export_spec.name}'."
                     )
-                if export_spec.name not in variable_set:
-                    continue
+                if export_spec.name not in output_variable_set:
+                    raise CompilationError(
+                        f"File exports '{export_spec.name}', but that rule has no "
+                        "compiled formula. Generic compilation currently exposes "
+                        "only formula-backed variables as public outputs."
+                    )
                 public_name = export_spec.public_name
                 existing = exported_bindings.get(public_name)
                 if existing is not None and existing != export_spec.name:
@@ -191,11 +203,20 @@ class RacFile:
                 for public_name in requested_public
             ]
 
-        requested_internal = _ordered_unique(outputs or variable_names)
+        requested_internal = _ordered_unique(outputs or output_variable_names)
         unknown = [name for name in requested_internal if name not in variable_set]
         if unknown:
             names = ", ".join(unknown)
             raise CompilationError(f"Unknown output variable(s): {names}.")
+        unsupported = [
+            name for name in requested_internal if name not in output_variable_set
+        ]
+        if unsupported:
+            names = ", ".join(unsupported)
+            raise CompilationError(
+                f"Output variable(s) {names} have no compiled formula. Generic "
+                "compilation currently exposes them as inputs, not public outputs."
+            )
         return requested_internal, [
             (internal_name, internal_name) for internal_name in requested_internal
         ]
@@ -488,10 +509,17 @@ def parse_rac(content: str, origin: Path | str | None = None) -> RacFile:
 
 
 def _derive_module_identity(origin: Path | None) -> str:
-    """Derive one rule/module identity from the file leaf name."""
+    """Derive one rule/module identity from its canonical RAC path when present."""
     if origin is None:
         return ""
-    return origin.stem
+    resolved = origin.resolve()
+    parts = resolved.parts
+    for root_name in ("statute", "regulation", "legislation"):
+        if root_name not in parts:
+            continue
+        root_index = parts.index(root_name)
+        return str(Path(*parts[root_index:]).with_suffix(""))
+    return resolved.stem
 
 
 def _resolve_parameter_binding_name(
@@ -625,6 +653,7 @@ def _parse_unified_definition(
     """
     attrs: dict[str, str] = {}
     temporal: list[TemporalEntry] = []
+    import_specs: list[ImportSpec] = []
     values: dict[int, float] = {}
     i = start
 
@@ -661,6 +690,10 @@ def _parse_unified_definition(
             i, values = _parse_values_block(lines, i + 1)
             continue
 
+        if stripped == "imports:":
+            i, import_specs = _parse_variable_imports_block(lines, i + 1)
+            continue
+
         attr_match = re.match(r"(\w+)\s*:\s*(.+)", stripped)
         if attr_match:
             attrs[attr_match.group(1)] = attr_match.group(2).strip().strip('"')
@@ -681,6 +714,10 @@ def _parse_unified_definition(
             period=attrs.get("period"),
             dtype=attrs.get("dtype"),
             label=attrs.get("label"),
+            default=_parse_default_value(attrs["default"])
+            if "default" in attrs
+            else None,
+            import_specs=list(import_specs),
             formula=attrs.get("formula", ""),
             temporal=temporal,
         )
@@ -773,3 +810,60 @@ def _parse_values_block(lines: list[str], start: int) -> tuple[int, dict[int, fl
         raise ParserError("values: block must contain at least one indexed value.")
 
     return i, values
+
+
+def _parse_default_value(value: str) -> Any:
+    """Parse one variable default value from inline RAC metadata."""
+    normalized = value.strip()
+    lowered = normalized.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if re.fullmatch(r"-?\d+", normalized):
+        return int(normalized)
+    if re.fullmatch(r"-?\d+(?:\.\d+)?", normalized):
+        return float(normalized)
+    return normalized
+
+
+def _parse_variable_imports_block(
+    lines: list[str],
+    start: int,
+) -> tuple[int, list[ImportSpec]]:
+    """Parse one per-variable `imports:` block."""
+    i, block = _collect_indented_block(lines, start)
+    if not block:
+        raise ParserError("imports: block must contain at least one import.")
+
+    specs: list[ImportSpec] = []
+    for line in block.split("\n"):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if not stripped.startswith("- "):
+            raise ParserError(
+                f"Invalid imports entry '{stripped}'. Use '- path#symbol' syntax."
+            )
+        item = stripped[2:].strip()
+        match = re.fullmatch(
+            r"([^#\s]+)#([A-Za-z_]\w*)(?:\s+as\s+([A-Za-z_]\w*))?",
+            item,
+        )
+        if match is None:
+            raise ParserError(
+                f"Invalid imports entry '{item}'. Use 'path#symbol' or "
+                "'path#symbol as alias'."
+            )
+        specs.append(
+            ImportSpec(
+                path=match.group(1),
+                symbols=(
+                    ImportSymbolSpec(name=match.group(2), alias=match.group(3)),
+                ),
+            )
+        )
+
+    if not specs:
+        raise ParserError("imports: block must contain at least one import.")
+    return i, specs

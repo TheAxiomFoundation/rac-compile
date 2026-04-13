@@ -648,13 +648,20 @@ class CompiledModule:
     ) -> "CompiledModule":
         """Compile a parsed RAC file into a shared compile model."""
         compile_context = compile_context or CompileContext()
-        variable_names = [variable.name for variable in rac_file.variables]
+        all_variable_names = [variable.name for variable in rac_file.variables]
+        declared_inputs = _build_declared_inputs(rac_file.variables, compile_context)
+        computed_variables = [
+            variable
+            for variable in rac_file.variables
+            if variable.name not in declared_inputs
+        ]
+        variable_names = [variable.name for variable in computed_variables]
         variable_kind_hints = _build_variable_kind_hints(rac_file.variables)
         parameter_kind_hints = _build_parameter_kind_hints(
             rac_file.parameters,
             compile_context,
         )
-        duplicate_names = sorted(set(variable_names) & set(rac_file.parameters))
+        duplicate_names = sorted(set(all_variable_names) & set(rac_file.parameters))
         if duplicate_names:
             names = ", ".join(duplicate_names)
             raise CompilationError(
@@ -673,7 +680,7 @@ class CompiledModule:
                     source_citation=source_citation,
                     compile_context=compile_context,
                 )
-                for variable in rac_file.variables
+                for variable in computed_variables
             ]
         else:
             compiled_variables = _compile_reachable_variables(
@@ -706,7 +713,7 @@ class CompiledModule:
         ]
 
         inputs = [
-            _infer_input(name)
+            declared_inputs.get(name, _infer_input(name))
             for name in _ordered_unique(
                 name
                 for variable in ordered_variables
@@ -1718,7 +1725,12 @@ def _compile_reachable_variables(
     variable_kind_hints: dict[str, str],
 ) -> list[CompiledVariable]:
     """Compile only variables reachable from the requested outputs."""
-    variables_by_name = {variable.name: variable for variable in rac_file.variables}
+    declared_inputs = _build_declared_inputs(rac_file.variables, compile_context)
+    variables_by_name = {
+        variable.name: variable
+        for variable in rac_file.variables
+        if variable.name not in declared_inputs
+    }
     unknown = [
         name
         for name in _ordered_unique(selected_outputs)
@@ -1754,6 +1766,101 @@ def _compile_reachable_variables(
         )
 
     return list(compiled_by_name.values())
+
+
+def _build_declared_inputs(
+    variables: list[VariableBlock],
+    compile_context: CompileContext,
+) -> dict[str, CompiledInput]:
+    """Collect typed declared-input rules from parsed variable blocks."""
+    return {
+        variable.name: _compile_declared_input(variable)
+        for variable in variables
+        if _is_declared_input_variable(variable, compile_context)
+    }
+
+
+def _is_declared_input_variable(
+    variable: VariableBlock,
+    compile_context: CompileContext,
+) -> bool:
+    """Return whether a parsed variable should behave as a public input."""
+    return not _resolve_variable_formula(variable, compile_context).strip()
+
+
+def _compile_declared_input(variable: VariableBlock) -> CompiledInput:
+    """Compile a no-formula variable declaration into one typed public input."""
+    inferred = _infer_input(variable.name)
+    value_kind = _declared_variable_value_kind(variable) or _input_value_kind(inferred)
+    default = _resolve_declared_input_default(variable, value_kind, inferred.default)
+    if value_kind == "boolean":
+        return CompiledInput(
+            name=variable.name,
+            default=default,
+            js_type="boolean",
+            python_type="bool",
+        )
+    if value_kind == "integer":
+        return CompiledInput(
+            name=variable.name,
+            default=default,
+            js_type="number",
+            python_type="int",
+        )
+    if value_kind == "number":
+        return CompiledInput(
+            name=variable.name,
+            default=default,
+            js_type="number",
+            python_type="float",
+        )
+    raise CompilationError(
+        f"Variable '{variable.name}' declares unsupported input dtype "
+        f"'{variable.dtype}'. Generic compilation currently supports only "
+        "boolean and numeric declared inputs."
+    )
+
+
+def _resolve_declared_input_default(
+    variable: VariableBlock,
+    value_kind: str,
+    fallback: Any,
+) -> Any:
+    """Normalize one declared input's explicit default or inferred fallback."""
+    default = variable.default
+    if default is None:
+        return fallback
+    if value_kind == "boolean":
+        if isinstance(default, bool):
+            return default
+        if isinstance(default, (int, float)) and default in {0, 1, 0.0, 1.0}:
+            return bool(default)
+        raise CompilationError(
+            f"Variable '{variable.name}' default must be boolean, got {default!r}."
+        )
+    if value_kind == "integer":
+        if isinstance(default, bool):
+            raise CompilationError(
+                f"Variable '{variable.name}' integer default cannot be boolean."
+            )
+        if isinstance(default, int):
+            return default
+        if isinstance(default, float) and default.is_integer():
+            return int(default)
+        raise CompilationError(
+            f"Variable '{variable.name}' default must be an integer, got {default!r}."
+        )
+    if value_kind == "number":
+        if isinstance(default, bool):
+            raise CompilationError(
+                f"Variable '{variable.name}' numeric default cannot be boolean."
+            )
+        if isinstance(default, (int, float)):
+            return default
+        raise CompilationError(
+            f"Variable '{variable.name}' default must be numeric, got {default!r}."
+        )
+    return default
 
 
 def _compile_parameter(

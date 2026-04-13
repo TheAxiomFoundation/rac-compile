@@ -217,6 +217,21 @@ eitc:
 
         assert result.variables[0].label == "Earned Income Tax Credit"
 
+    def test_variable_with_default_metadata(self):
+        """No-formula variable defaults are preserved for declared inputs."""
+        result = parse_rac(
+            """
+is_us_citizen_national_or_resident:
+  entity: Person
+  period: Year
+  dtype: Boolean
+  default: false
+"""
+        )
+
+        variable = result.variables[0]
+        assert variable.default is False
+
     def test_variable_with_multiple_temporal_formulas(self):
         """Variables can define multiple dated formulas."""
         result = parse_rac(
@@ -238,6 +253,27 @@ credit:
             "2018-01-01",
         ]
         assert "0.10" in var.effective_formula
+
+    def test_variable_imports_block_parses_spec_style_imports(self):
+        """Variables can declare per-rule imports with `path#symbol` syntax."""
+        result = parse_rac(
+            """
+first_reduction:
+  imports:
+    - 26/62#adjusted_gross_income
+    - 26/21/a/2#base_applicable_percentage as base_pct
+  entity: TaxUnit
+  period: Year
+  dtype: Rate
+  from 2002-01-01:
+    max(0, adjusted_gross_income - base_pct)
+"""
+        )
+
+        variable = result.variables[0]
+        assert [spec.path for spec in variable.import_specs] == ["26/62", "26/21/a/2"]
+        assert variable.import_specs[0].symbols[0].name == "adjusted_gross_income"
+        assert variable.import_specs[1].symbols[0].alias == "base_pct"
 
     def test_variable_rejects_parameter_values_block(self):
         """Variables cannot use the parameter `values:` table syntax."""

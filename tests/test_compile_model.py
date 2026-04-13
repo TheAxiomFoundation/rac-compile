@@ -35,6 +35,60 @@ tax:
         assert [parameter.name for parameter in module.parameters] == ["rate"]
         assert [variable.name for variable in module.variables] == ["tax"]
 
+    def test_no_formula_variables_become_declared_inputs(self):
+        """No-formula rules participate as typed inputs instead of computations."""
+        rac = """
+is_us_citizen_national_or_resident:
+  entity: Person
+  period: Year
+  dtype: Boolean
+  default: false
+
+ctc_meets_citizenship_requirement:
+  entity: Person
+  period: Year
+  dtype: Boolean
+  from 1998-01-01:
+    is_us_citizen_national_or_resident
+"""
+        module = parse_rac(rac).to_compile_model()
+        lowered = parse_rac(rac).to_lowered_program()
+
+        assert [compiled_input.name for compiled_input in module.inputs] == [
+            "is_us_citizen_national_or_resident"
+        ]
+        assert module.inputs[0].default is False
+        assert [variable.name for variable in module.variables] == [
+            "ctc_meets_citizenship_requirement"
+        ]
+        assert [compiled_input.name for compiled_input in lowered.inputs] == [
+            "is_us_citizen_national_or_resident"
+        ]
+        assert lowered.inputs[0].value_kind == "boolean"
+
+    def test_no_formula_variables_without_explicit_defaults_use_typed_fallbacks(self):
+        """Declared inputs without defaults fall back from dtype, not heuristics."""
+        rac = """
+full_time_student_months:
+  entity: Person
+  period: Year
+  dtype: Integer
+
+is_full_time_student:
+  entity: Person
+  period: Year
+  dtype: Boolean
+  from 2002-01-01:
+    full_time_student_months >= 5
+"""
+        module = parse_rac(rac).to_compile_model()
+
+        assert [compiled_input.name for compiled_input in module.inputs] == [
+            "full_time_student_months"
+        ]
+        assert module.inputs[0].default == 0
+        assert module.inputs[0].python_type == "int"
+
     def test_lowered_program_round_trips_and_generates_python(self):
         """Compiled modules can emit and reload a lowered JSON bundle."""
         rac = """

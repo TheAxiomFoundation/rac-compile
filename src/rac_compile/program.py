@@ -140,38 +140,16 @@ class RacProgram:
                 module_exports=module_exports,
                 resolver=self.resolver,
             )
-            unqualified_bindings = dict(internal_symbols[origin])
-            qualified_bindings: dict[str, dict[str, str]] = {}
-
-            for import_spec in _local_import_specs(rac_file):
-                target = _resolve_import_path(import_spec.path, origin, self.resolver)
-                target_exports = module_exports[target]
-                if import_spec.symbols:
-                    _merge_selective_import_bindings(
-                        importer=origin,
-                        imported_path=target,
-                        current_bindings=unqualified_bindings,
-                        qualified_bindings=qualified_bindings,
-                        import_spec=import_spec,
-                        imported_bindings=target_exports,
-                    )
-                    continue
-                if import_spec.alias is None:
-                    _merge_plain_import_bindings(
-                        importer=origin,
-                        imported_path=target,
-                        current_bindings=unqualified_bindings,
-                        imported_bindings=target_exports,
-                    )
-                    continue
-                _add_qualified_import_binding(
-                    importer=origin,
-                    alias=import_spec.alias,
-                    target=target,
-                    unqualified_bindings=unqualified_bindings,
-                    qualified_bindings=qualified_bindings,
-                    target_exports=target_exports,
-                )
+            base_unqualified_bindings = dict(internal_symbols[origin])
+            base_qualified_bindings: dict[str, dict[str, str]] = {}
+            _apply_import_specs(
+                importer=origin,
+                import_specs=_local_import_specs(rac_file),
+                resolver=self.resolver,
+                module_exports=module_exports,
+                unqualified_bindings=base_unqualified_bindings,
+                qualified_bindings=base_qualified_bindings,
+            )
 
             for name, parameter in rac_file.parameters.items():
                 merged.parameters[internal_symbols[origin][name]] = _copy_parameter(
@@ -180,12 +158,25 @@ class RacProgram:
 
             for variable in rac_file.variables:
                 internal_name = internal_symbols[origin][variable.name]
+                variable_unqualified_bindings = dict(base_unqualified_bindings)
+                variable_qualified_bindings = {
+                    alias: dict(bindings)
+                    for alias, bindings in base_qualified_bindings.items()
+                }
+                _apply_import_specs(
+                    importer=origin,
+                    import_specs=variable.import_specs,
+                    resolver=self.resolver,
+                    module_exports=module_exports,
+                    unqualified_bindings=variable_unqualified_bindings,
+                    qualified_bindings=variable_qualified_bindings,
+                )
                 merged.variables.append(
                     _copy_variable(
                         variable,
                         internal_name=internal_name,
-                        unqualified_bindings=unqualified_bindings,
-                        qualified_bindings=qualified_bindings,
+                        unqualified_bindings=variable_unqualified_bindings,
+                        qualified_bindings=variable_qualified_bindings,
                     )
                 )
                 output_variables.add(internal_name)
@@ -524,6 +515,8 @@ def _copy_variable(
         period=variable.period,
         dtype=variable.dtype,
         label=variable.label,
+        default=variable.default,
+        import_specs=list(variable.import_specs),
         formula=variable.formula,
         temporal=list(variable.temporal),
         source_citation=variable.source_citation,
@@ -550,6 +543,8 @@ def _local_import_specs(rac_file: RacFile) -> list[ImportSpec]:
 def _dependency_import_paths(rac_file: RacFile) -> list[str]:
     """Return all imported file paths, including re-export dependencies."""
     paths = [import_spec.path for import_spec in _local_import_specs(rac_file)]
+    for variable in rac_file.variables:
+        paths.extend(import_spec.path for import_spec in variable.import_specs)
     paths.extend(re_export_spec.path for re_export_spec in rac_file.re_export_specs)
     return _ordered_unique(paths)
 
@@ -594,11 +589,84 @@ def _resolve_import_path(
         try:
             return resolver.resolve(import_path, importer)
         except ModuleResolutionError as exc:
+            citation_relative = _resolve_citation_relative_import_path(
+                import_path,
+                importer,
+            )
+            if citation_relative is not None:
+                return citation_relative
             raise CompilationError(str(exc)) from exc
+    citation_relative = _resolve_citation_relative_import_path(import_path, importer)
+    if citation_relative is not None:
+        return citation_relative
     candidate = Path(import_path)
     if not candidate.is_absolute():
         candidate = importer.parent / candidate
     return candidate.resolve()
+
+
+def _apply_import_specs(
+    *,
+    importer: Path,
+    import_specs: list[ImportSpec],
+    resolver: ImportResolver | None,
+    module_exports: dict[Path, dict[str, str]],
+    unqualified_bindings: dict[str, str],
+    qualified_bindings: dict[str, dict[str, str]],
+) -> None:
+    """Resolve and merge a list of import specs into one file or variable scope."""
+    for import_spec in import_specs:
+        target = _resolve_import_path(import_spec.path, importer, resolver)
+        target_exports = module_exports[target]
+        if import_spec.symbols:
+            _merge_selective_import_bindings(
+                importer=importer,
+                imported_path=target,
+                current_bindings=unqualified_bindings,
+                qualified_bindings=qualified_bindings,
+                import_spec=import_spec,
+                imported_bindings=target_exports,
+            )
+            continue
+        if import_spec.alias is None:
+            _merge_plain_import_bindings(
+                importer=importer,
+                imported_path=target,
+                current_bindings=unqualified_bindings,
+                imported_bindings=target_exports,
+            )
+            continue
+        _add_qualified_import_binding(
+            importer=importer,
+            alias=import_spec.alias,
+            target=target,
+            unqualified_bindings=unqualified_bindings,
+            qualified_bindings=qualified_bindings,
+            target_exports=target_exports,
+        )
+
+
+def _resolve_citation_relative_import_path(
+    import_path: str,
+    importer: Path,
+) -> Path | None:
+    """Resolve spec-style title-root import paths like `26/32/a`."""
+    candidate = Path(import_path)
+    if candidate.is_absolute() or import_path.startswith(".") or candidate.suffix:
+        return None
+
+    importer_parts = importer.resolve().parts
+    for root_name in ("statute", "regulation", "legislation"):
+        if root_name not in importer_parts:
+            continue
+        root_index = importer_parts.index(root_name)
+        repo_root = Path(*importer_parts[:root_index])
+        target_path = candidate
+        if len(candidate.parts) == 2:
+            title, section = candidate.parts
+            target_path = Path(title) / section / section
+        return (repo_root / root_name / target_path).with_suffix(".rac").resolve()
+    return None
 
 
 def _validate_internal_symbol_uniqueness(

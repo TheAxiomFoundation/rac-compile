@@ -102,6 +102,43 @@ tax:
         assert result["tax"] == 90
         assert "taxable_income" not in result
 
+    def test_load_rac_program_resolves_spec_style_variable_imports(self, tmp_path):
+        """Per-variable `imports:` blocks resolve through statute-root paths."""
+        statute_root = tmp_path / "statute" / "26" / "62"
+        statute_root.mkdir(parents=True)
+        (statute_root / "62.rac").write_text(
+            """
+adjusted_gross_income:
+  entity: TaxUnit
+  period: Year
+  dtype: Money
+"""
+        )
+        target_root = tmp_path / "statute" / "26" / "21" / "a" / "2"
+        target_root.mkdir(parents=True)
+        entry = target_root / "A.rac"
+        entry.write_text(
+            """
+first_reduction:
+  imports:
+    - 26/62#adjusted_gross_income
+  entity: TaxUnit
+  period: Year
+  dtype: Rate
+  from 2002-01-01:
+    adjusted_gross_income >= 15000
+"""
+        )
+
+        lowered = load_rac_program(entry).to_lowered_program(
+            outputs=["first_reduction"]
+        )
+
+        assert [compiled_input.name for compiled_input in lowered.inputs] == [
+            "statute_26_62_62_adjusted_gross_income"
+        ]
+        assert lowered.outputs[0].module_identity == "statute/26/21/a/2/A"
+
     def test_selected_outputs_prune_unreachable_imported_variables(self, tmp_path):
         """Graph pruning excludes unreachable imported variables before validation."""
         shared = tmp_path / "shared.rac"

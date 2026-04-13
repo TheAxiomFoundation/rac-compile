@@ -32,8 +32,8 @@ Entry files can import other `.rac` files:
 rac-compile compile examples/working_families/benefit_amount.rac --python -o benefit_amount.py
 ```
 
-Use leaf-named source files rather than generic entrypoint names. In other
-words, prefer `benefit_amount.rac` over `main.rac`.
+Use canonical RAC paths for real source trees rather than generic entrypoint
+names. In other words, prefer `statute/26/32/c/2/A.rac` over `main.rac`.
 
 The shipped file-graph example lives in:
 
@@ -119,8 +119,9 @@ The lowered JSON includes:
 - typed outputs, each with `module_identity`
 
 This is the backend-neutral seam between RAC source and target-specific codegen.
-For file-backed programs, `module_identity` comes from the `.rac` file leaf, so
-leaf naming affects the compiled artifact directly.
+For canonical RAC trees, `module_identity` comes from the `statute/...`,
+`regulation/...`, or `legislation/...` path. For ad hoc files outside those
+roots, the compiler falls back to the file leaf.
 
 ## Python API
 

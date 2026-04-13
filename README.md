@@ -39,7 +39,7 @@ rac-compile compile examples/snap.rac --python -o snap.py
 # Compile a RAC file to Rust
 rac-compile compile examples/snap.rac --rust -o snap.rs
 
-# Compile a leaf-named RAC module and its local imports
+# Compile a real RAC module and its local imports
 rac-compile compile examples/working_families/benefit_amount.rac --python -o benefit_amount.py
 
 # Compile with import aliases to disambiguate duplicate module symbols
@@ -81,6 +81,9 @@ rac-compile lower examples/working_families/benefit_amount.rac --parameter phase
 
 # Run the built-in compiler, batch-execution, and example-oracle scorecard
 rac-compile harness
+
+# Opt into curated compatibility checks against sibling live-stack RAC files
+rac-compile harness --include-live
 
 # Opt into external PolicyEngine-backed oracle checks (requires policyengine-us)
 rac-compile harness --include-external
@@ -204,7 +207,7 @@ The generic `rac-compile compile` path now shares one parsed compile model for J
 - Supported: module re-exports via `export from "./shared.rac" import tax, rate as public_rate`
 - Supported: selective imports via `from "./shared.rac" import tax, threshold as income_threshold`
 - Supported: entry-file output selection against the public export surface, including aliased output names
-- Supported: first-class rule/module identity derived from each `.rac` file leaf, preserved through lowered bundles and generated citations
+- Supported: first-class rule/module identity preserved through lowered bundles and generated citations; canonical `statute/...`, `regulation/...`, and `legislation/...` files use their path identity
 - Unsupported: package registries, remote imports, nested namespace chains beyond `alias.value`, wildcard re-exports, loops, match/case, try/except, and other statement forms outside assignments, `if` / `elif` / `else`, and `return`
 - Unsupported: attribute access, custom helper calls, slices, and other expression forms outside the validated scalar subset
 - Unsupported: string formula literals in Rust output, and the prebuilt `rac-compile eitc` shortcut still only emits JavaScript or Python
@@ -219,7 +222,7 @@ If a file defines explicit exports, output selection and generated result keys u
 If a re-export asks for a name a dependency does not export, the compiler errors instead of silently omitting it.
 If a bare import has no configured module root, or resolves to more than one file across roots, the compiler errors instead of guessing.
 If a package-prefixed import names an unknown package alias, or a configured package alias points at no file, the compiler errors instead of falling back to a different root.
-If a loaded program contains two different `.rac` files with the same leaf name, the compiler errors instead of inventing an ambiguous rule identity.
+If a loaded program contains two different `.rac` files with the same canonical rule identity, the compiler errors instead of inventing an ambiguous identity.
 If a bare parameter binding name matches more than one imported source-only parameter, the compiler errors instead of guessing; bind it as `module_identity.symbol`.
 
 Unsupported constructs fail with an explicit compiler error instead of generating misleading output.
@@ -293,6 +296,7 @@ failing case first and then make it pass.
 - Use `rac-compile harness --json` for machine-readable output
 - Use repeated `--case NAME` to run a focused subset while developing a feature
 - The harness now also validates Rust when `rustc` is available locally
+- `rac-compile harness --include-live` opts into curated real-file compatibility checks against sibling repos such as `rac-us`
 - `rac-compile harness --include-external` opts into PolicyEngine-backed oracle cases when `policyengine-us` is installed
 
 ### Validation

@@ -41,16 +41,17 @@ flowchart LR
 
 ### 1. Rule source
 
-The source of truth is checked-in `.rac` files named by subsection leaf. The
-leaf name becomes `module_identity`, which is now operational rather than just
-stylistic. That identity shows up in imports, binding keys, lowered bundles,
-and generated citation metadata.
+The source of truth is checked-in `.rac` files. For canonical RAC trees,
+`module_identity` comes from the `statute/...`, `regulation/...`, or
+`legislation/...` path. For ad hoc files outside those roots, it falls back to
+the file leaf name. That identity shows up in imports, binding keys, lowered
+bundles, and generated citation metadata.
 
 ### 2. Parse + graph assembly
 
 `RacFile` parses one file. `RacProgram` loads the file graph, resolves imports,
-applies export surfaces, and enforces identity rules such as unique leaf names
-within one loaded program.
+applies export surfaces, and enforces identity rules such as unique canonical
+module identities within one loaded program.
 
 ### 3. Resolution
 
@@ -99,7 +100,7 @@ Current downstream consumers:
 ### Stable enough to build on
 
 - `.rac`-only source format
-- leaf-based `module_identity`
+- canonical path-based `module_identity` for real RAC trees
 - local/imported module graph loading
 - explicit exports, import aliases, selective imports, and re-exports
 - shared lowered bundle
@@ -139,8 +140,8 @@ first-class resolver contract instead of raw override maps.
 ### B. Rule identity policy
 
 Question:
-What exactly counts as a valid subsection leaf, and which characters should be
-considered acceptable or forbidden?
+What exactly counts as the canonical RAC identity path outside the current
+`statute/`, `regulation/`, and `legislation/` roots?
 
 Why it matters:
 `module_identity` now flows into imports, bindings, lowered metadata, and

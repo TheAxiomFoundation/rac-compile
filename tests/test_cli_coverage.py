@@ -1197,7 +1197,46 @@ class TestCLIMainHarness:
             with patch("sys.argv", ["rac-compile", "harness", "--include-external"]):
                 with patch("builtins.print"):
                     main()
-        mock_run.assert_called_once_with(case_names=None, include_external=True)
+        mock_run.assert_called_once_with(
+            case_names=None,
+            include_external=True,
+            include_live=False,
+        )
+
+    def test_harness_include_live_flag_is_forwarded(self):
+        """harness --include-live forwards the opt-in live compatibility flag."""
+        summary = HarnessSummary(
+            total=1,
+            passed=0,
+            failed=1,
+            skipped=0,
+            by_category={
+                "live_stack": {"total": 1, "passed": 0, "failed": 1, "skipped": 0}
+            },
+            results=[
+                HarnessResult(
+                    case="live_rac_us_citation_identity",
+                    category="live_stack",
+                    passed=False,
+                    status="failed",
+                    detail="Compatibility gap.",
+                )
+            ],
+        )
+        with patch(
+            "src.rac_compile.cli.run_compiler_harness",
+            return_value=summary,
+        ) as mock_run:
+            with patch("sys.argv", ["rac-compile", "harness", "--include-live"]):
+                with pytest.raises(SystemExit) as exc_info:
+                    with patch("builtins.print"):
+                        main()
+                assert exc_info.value.code == 1
+        mock_run.assert_called_once_with(
+            case_names=None,
+            include_external=False,
+            include_live=True,
+        )
 
     def test_harness_unknown_case_exits_1(self):
         """Unknown harness case names are rejected."""

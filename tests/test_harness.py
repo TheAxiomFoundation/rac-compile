@@ -2,12 +2,15 @@
 
 import json
 import shutil
+from pathlib import Path
 
 import pytest
 
 from src.rac_compile.harness import (
     HARNESS_CASES,
+    HarnessCase,
     _check_js_runtime,
+    _run_case,
     format_harness_summary,
     format_harness_summary_json,
     run_compiler_harness,
@@ -20,13 +23,16 @@ class TestCompilerHarness:
     def test_run_compiler_harness_all_cases_pass(self):
         """The built-in harness runs green in the current repo state."""
         summary = run_compiler_harness()
-        default_cases = [case for case in HARNESS_CASES if not case.external]
+        default_cases = [
+            case for case in HARNESS_CASES if not case.external and not case.live
+        ]
 
         assert summary.total == len(default_cases)
         assert summary.failed == 0
         assert summary.passed == len(default_cases)
         assert "control_flow" in summary.by_category
         assert "graph" in summary.by_category
+        assert "live_stack" not in summary.by_category
         assert "oracle" in summary.by_category
         assert "policyengine" not in summary.by_category
         assert "subgraph" in summary.by_category
@@ -86,6 +92,89 @@ class TestCompilerHarness:
         assert summary.total == 1
         assert summary.skipped == 1
         assert summary.results[0].status == "skipped"
+
+    def test_run_compiler_harness_include_live_adds_live_cases(self):
+        """The opt-in live lane adds curated current-stack compatibility cases."""
+        summary = run_compiler_harness(include_live=True)
+        live_cases = [case for case in HARNESS_CASES if case.live]
+        default_cases = [
+            case for case in HARNESS_CASES if not case.external and not case.live
+        ]
+
+        assert summary.total == len(default_cases) + len(live_cases)
+        assert "live_stack" in summary.by_category
+
+    def test_run_case_workspace_case_skips_when_repo_is_missing(self, monkeypatch):
+        """Missing sibling live repos skip cleanly for opt-in workspace cases."""
+        case = HarnessCase(
+            name="missing_live_workspace",
+            category="live_stack",
+            description="Missing workspace repo skips.",
+            workspace_entrypoint="definitely-missing-repo/example.rac",
+            targets=(),
+            live=True,
+        )
+        monkeypatch.setattr(
+            "src.rac_compile.harness._WORKSPACE_ROOT",
+            Path("/definitely/missing"),
+        )
+        result = _run_case(case)
+
+        assert result.status == "skipped"
+        assert "requires" in result.detail
+
+    def test_run_case_checks_expected_inputs_and_output_identity(self):
+        """Lowered bundle checks can validate structural compatibility expectations."""
+        case = HarnessCase(
+            name="structural_lowering_contract",
+            category="core",
+            description=(
+                "Structural lowered checks pass for expected inputs and identity."
+            ),
+            rac="""
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    wages * 0.1
+""",
+            inputs={"wages": 100},
+            expected_outputs={"tax": 10},
+            expected_input_names=["wages"],
+            expected_output_module_identities={"tax": "main"},
+            supporting_files={"notes/placeholder.txt": "placeholder"},
+            targets=(),
+        )
+
+        result = _run_case(case)
+
+        assert result.status == "passed"
+
+    def test_run_case_checks_output_identity_without_expected_inputs(self):
+        """Structural checks can validate output identity without pinning inputs."""
+        case = HarnessCase(
+            name="identity_only_lowering_contract",
+            category="core",
+            description="Structural lowered checks can focus on output identity.",
+            rac="""
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    wages * 0.1
+""",
+            inputs={"wages": 100},
+            expected_outputs={"tax": 10},
+            expected_output_module_identities={"tax": "main"},
+            supporting_files={"notes/placeholder.txt": "placeholder"},
+            targets=(),
+        )
+
+        result = _run_case(case)
+
+        assert result.status == "passed"
 
     def test_format_harness_summary_text_and_json(self):
         """Harness summaries can be rendered for CLI output."""

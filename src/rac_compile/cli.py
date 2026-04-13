@@ -270,6 +270,14 @@ def main():
         action="store_true",
         help="Include opt-in external oracle cases such as PolicyEngine checks",
     )
+    harness_parser.add_argument(
+        "--include-live",
+        action="store_true",
+        help=(
+            "Include curated compatibility checks against sibling live-stack "
+            "RAC files"
+        ),
+    )
 
     # EITC command (pre-built)
     eitc_parser = subparsers.add_parser(
@@ -374,6 +382,7 @@ def main():
             summary = run_compiler_harness(
                 case_names=args.case,
                 include_external=args.include_external,
+                include_live=args.include_live,
             )
         except CompilationError as exc:
             print(f"Error: {exc}", file=sys.stderr)
