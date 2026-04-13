@@ -1,0 +1,18 @@
+# Simple Tax Calculator
+# A minimal example of .rac syntax
+
+source:
+  citation: "Example Tax Code"
+  accessed: 2025-01-01
+
+rate:
+  source: "example/tax/rate"
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  label: "Income Tax"
+  from 2025-01-01:
+    # Simple flat tax
+    return income * 0.2

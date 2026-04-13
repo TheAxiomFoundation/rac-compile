@@ -1,5 +1,6 @@
 """
-Validation module: Compare RAC calculators against PolicyEngine-US on CPS microdata.
+Validation module: Compare compiled RAC examples against PolicyEngine-US
+on CPS microdata.
 
 This follows the policyengine-taxsim pattern:
 - No hand-built test cases
@@ -9,7 +10,7 @@ This follows the policyengine-taxsim pattern:
 
 from .comparator import Comparator, ComparisonConfig, ComparisonResults
 from .cps_loader import CPSHousehold, load_cps_data
-from .runners import run_policyengine, run_rac
+from .runners import run_policyengine, run_policyengine_household, run_rac
 
 __all__ = [
     "Comparator",
@@ -17,6 +18,7 @@ __all__ = [
     "ComparisonResults",
     "run_rac",
     "run_policyengine",
+    "run_policyengine_household",
     "load_cps_data",
     "CPSHousehold",
 ]

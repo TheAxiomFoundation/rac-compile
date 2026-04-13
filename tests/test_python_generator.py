@@ -121,6 +121,25 @@ class TestGenerateOutput:
         assert '"param": "rate"' in code or "'param': 'rate'" in code
         assert '"variable": "tax"' in code or "'variable': 'tax'" in code
 
+    def test_generate_includes_module_identity_in_citations(self):
+        """Generated Python citations keep the leaf-derived source rule identity."""
+        from src.rac_compile.python_generator import PythonCodeGenerator
+
+        gen = PythonCodeGenerator()
+        gen.add_parameter("rate", {0: 20}, "26 USC 1", module_identity="shared")
+        gen.add_input("income", 0)
+        gen.add_variable(
+            "tax",
+            ["income"],
+            "income * 0.2",
+            citation="26 USC 1(a)",
+            module_identity="benefit_amount",
+        )
+        code = gen.generate()
+
+        assert '"module_identity": "shared"' in code
+        assert '"module_identity": "benefit_amount"' in code
+
     def test_generate_no_provenance(self):
         """Can generate without provenance comments."""
         from src.rac_compile.python_generator import PythonCodeGenerator
@@ -201,6 +220,45 @@ class TestPythonExecution:
         assert "calculate" in namespace
         result = namespace["calculate"](x=10)
         assert result["y"] == 20
+
+    def test_multiline_formula_returns_trailing_expression(self):
+        """Multiline formulas implicitly return a trailing Python expression."""
+        from src.rac_compile.python_generator import PythonCodeGenerator
+
+        gen = PythonCodeGenerator()
+        gen.add_input("x", 0, "int")
+        gen.add_variable("y", ["x"], "tmp = x + 1\ntmp")
+        namespace = {}
+
+        exec(gen.generate(), namespace)
+
+        assert namespace["calculate"](x=10)["y"] == 11
+
+    def test_semicolon_block_returns_trailing_expression(self):
+        """Same-line semicolon blocks are normalized before Python emission."""
+        from src.rac_compile.python_generator import PythonCodeGenerator
+
+        gen = PythonCodeGenerator()
+        gen.add_input("x", 0, "int")
+        gen.add_variable("y", ["x"], "tmp = x + 1; tmp")
+        namespace = {}
+
+        exec(gen.generate(), namespace)
+
+        assert namespace["calculate"](x=10)["y"] == 11
+
+    def test_block_preserves_explicit_return_without_space(self):
+        """Explicit Python returns like return(x) stay valid in wrapped blocks."""
+        from src.rac_compile.python_generator import PythonCodeGenerator
+
+        gen = PythonCodeGenerator()
+        gen.add_input("x", 0, "int")
+        gen.add_variable("y", ["x"], "tmp = x + 1\nreturn(x + tmp)")
+        namespace = {}
+
+        exec(gen.generate(), namespace)
+
+        assert namespace["calculate"](x=10)["y"] == 21
 
     def test_eitc_calculator_execution(self):
         """EITC calculator executes and returns reasonable values."""

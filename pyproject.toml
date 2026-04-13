@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "rac-compile"
 version = "0.2.0"
-description = "Compile RAC .rac/.cos files to standalone JavaScript and Python calculators"
+description = "Compile RAC .rac files to standalone JavaScript and Python calculators"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
@@ -50,7 +50,7 @@ packages = ["src/rac_compile"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
+pythonpath = ["src", "."]
 
 [tool.towncrier]
 package = "rac_compile"

@@ -4,7 +4,7 @@ EITC Calculator - Python reference implementation.
 Source: 26 USC 32
 Tax Year: 2025
 
-This matches the logic in examples/eitc.cos exactly.
+This matches the logic in examples/eitc.rac exactly.
 """
 
 from dataclasses import dataclass

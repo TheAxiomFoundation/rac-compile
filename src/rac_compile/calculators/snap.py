@@ -4,7 +4,7 @@ SNAP Calculator - Python reference implementation.
 Source: 7 USC 2017, 7 CFR Part 273
 Fiscal Year: 2025
 
-This matches the logic in examples/snap.cos exactly.
+This matches the logic in examples/snap.rac exactly.
 """
 
 from dataclasses import dataclass

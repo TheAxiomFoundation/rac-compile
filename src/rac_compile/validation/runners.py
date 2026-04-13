@@ -9,26 +9,93 @@ Two modes:
 2. Individual (slow): Build individual situations for each household
 """
 
-from typing import Dict
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Callable, Dict
 
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
-from ..calculators import (
-    calculate_actc,
-    calculate_ctc,
-    calculate_eitc,
-    calculate_snap_benefit,
-)
-from ..calculators.ctc import CTC_PARAMS
-from ..calculators.eitc import EITC_PARAMS
-from ..calculators.snap import SNAP_PARAMS
+from ..batch_executor import execute_lowered_program_batch
+from ..compile_model import LoweredProgram
+from ..program import load_rac_program
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_VALIDATION_EFFECTIVE_DATE = date(2025, 1, 1)
+
+
+@dataclass(frozen=True)
+class CompiledValidationCalculators:
+    """Compiled calculator callables for the shipped validation examples."""
+
+    eitc: Callable[..., dict[str, Any]]
+    ctc: Callable[..., dict[str, Any]]
+    snap: Callable[..., dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class LoweredValidationPrograms:
+    """Lowered programs for the shipped validation examples."""
+
+    eitc: LoweredProgram
+    ctc: LoweredProgram
+    snap: LoweredProgram
+
+
+@lru_cache(maxsize=1)
+def _load_lowered_validation_programs() -> LoweredValidationPrograms:
+    """Lower the shipped validation examples once."""
+    return LoweredValidationPrograms(
+        eitc=_load_validation_program("eitc.rac", outputs=["eitc"]),
+        ctc=_load_validation_program("ctc.rac", outputs=["ctc", "actc"]),
+        snap=_load_validation_program("snap.rac", outputs=["snap_benefit"]),
+    )
+
+
+@lru_cache(maxsize=1)
+def _load_compiled_validation_calculators() -> CompiledValidationCalculators:
+    """Compile the shipped validation examples to Python callables once."""
+    programs = _load_lowered_validation_programs()
+    return CompiledValidationCalculators(
+        eitc=_lowered_program_to_python_callable(programs.eitc),
+        ctc=_lowered_program_to_python_callable(programs.ctc),
+        snap=_lowered_program_to_python_callable(programs.snap),
+    )
+
+
+def _load_validation_program(
+    filename: str,
+    *,
+    outputs: list[str],
+) -> LoweredProgram:
+    """Lower one shipped validation example once."""
+    return load_rac_program(_REPO_ROOT / "examples" / filename).to_lowered_program(
+        effective_date=_VALIDATION_EFFECTIVE_DATE,
+        outputs=outputs,
+    )
+
+
+def _lowered_program_to_python_callable(
+    program: LoweredProgram,
+) -> Callable[..., dict[str, Any]]:
+    """Compile one lowered validation program to Python."""
+    code = program.to_python_generator().generate()
+    namespace: dict[str, Any] = {}
+    exec(code, namespace)
+    calculate = namespace.get("calculate")
+    if not callable(calculate):
+        raise RuntimeError("Compiled validation example did not define calculate().")
+    return calculate
 
 
 def run_rac(df: pd.DataFrame, show_progress: bool = True) -> pd.DataFrame:
     """
-    Run RAC calculators on CPS household data.
+    Run compiled RAC examples on CPS household data.
 
     Args:
         df: DataFrame with household data (from load_cps_data)
@@ -37,6 +104,7 @@ def run_rac(df: pd.DataFrame, show_progress: bool = True) -> pd.DataFrame:
     Returns:
         DataFrame with household_id and calculated values
     """
+    calculators = _load_compiled_validation_calculators()
     results = []
     iterator = (
         tqdm(df.iterrows(), total=len(df), desc="RAC")
@@ -45,29 +113,19 @@ def run_rac(df: pd.DataFrame, show_progress: bool = True) -> pd.DataFrame:
     )
 
     for _, row in iterator:
-        # EITC
-        eitc_result = calculate_eitc(
+        eitc_result = calculators.eitc(
             earned_income=row["earned_income"],
             agi=row["agi"],
             n_children=row["n_children"],
             is_joint=row["is_joint"],
         )
-
-        # CTC
-        ctc_result = calculate_ctc(
+        ctc_result = calculators.ctc(
             n_qualifying_children=row["n_children"],
             agi=row["agi"],
             is_joint=row["is_joint"],
-        )
-
-        # ACTC
-        actc_result = calculate_actc(
-            n_qualifying_children=row["n_children"],
             earned_income=row["earned_income"],
         )
-
-        # SNAP
-        snap_result = calculate_snap_benefit(
+        snap_result = calculators.snap(
             household_size=row["household_size"],
             gross_income=row["gross_monthly_income"],
         )
@@ -75,14 +133,16 @@ def run_rac(df: pd.DataFrame, show_progress: bool = True) -> pd.DataFrame:
         results.append(
             {
                 "household_id": row["household_id"],
-                "rac_eitc": eitc_result.eitc,
-                "rac_ctc": ctc_result.ctc,
-                "rac_actc": actc_result.actc,
-                "rac_snap": snap_result.benefit,
+                "rac_eitc": eitc_result["eitc"],
+                "rac_ctc": ctc_result["ctc"],
+                "rac_actc": ctc_result["actc"],
+                "rac_snap": snap_result["snap_benefit"],
             }
         )
 
-    return pd.DataFrame(results)
+    results_df = pd.DataFrame(results)
+    results_df.attrs["rac_execution_mode"] = "compiled_example"
+    return results_df
 
 
 def run_policyengine(
@@ -134,25 +194,54 @@ def run_policyengine(
                 }
             )
 
-    return pd.DataFrame(results)
+    results_df = pd.DataFrame(results)
+    results_df.attrs["policyengine_execution_mode"] = "policyengine_household"
+    return results_df
+
+
+def run_policyengine_household(
+    inputs: Dict[str, Any],
+    year: int = 2025,
+) -> Dict[str, float]:
+    """
+    Run PolicyEngine-US for one normalized household input record.
+
+    This is the narrow bridge used by the compiler harness for fixed
+    example-oracle comparisons without going through the full CPS pipeline.
+    """
+    return _run_single_pe_simulation(pd.Series(inputs), year)
 
 
 def _run_single_pe_simulation(row: pd.Series, year: int) -> Dict:
     """Run PolicyEngine simulation for a single household."""
     from policyengine_us import Simulation
 
+    gross_monthly_income = float(
+        row.get("gross_monthly_income", row.get("gross_income", 0)) or 0
+    )
+    earned_income = float(row.get("earned_income", 0) or 0)
+    if earned_income == 0 and gross_monthly_income != 0:
+        earned_income = gross_monthly_income * 12
+
+    is_joint = bool(row.get("is_joint", False))
+    n_children = int(row.get("n_children", row.get("n_qualifying_children", 0)) or 0)
+    minimum_household_size = 1 + int(is_joint) + n_children
+    household_size = int(row.get("household_size", minimum_household_size) or 0)
+    household_size = max(household_size, minimum_household_size)
+    state_code = str(row.get("state_code", "CA") or "CA")
+
     # Build people dict
     people = {
         "adult": {
             "age": {year: 30},
-            "employment_income": {year: row["earned_income"]},
+            "employment_income": {year: earned_income},
         }
     }
 
     members = ["adult"]
 
     # Add spouse if joint
-    if row["is_joint"]:
+    if is_joint:
         people["spouse"] = {
             "age": {year: 30},
             "employment_income": {year: 0},
@@ -160,7 +249,7 @@ def _run_single_pe_simulation(row: pd.Series, year: int) -> Dict:
         members.append("spouse")
 
     # Add children
-    for i in range(row["n_children"]):
+    for i in range(n_children):
         child_id = f"child_{i}"
         people[child_id] = {
             "age": {year: 5},
@@ -169,7 +258,7 @@ def _run_single_pe_simulation(row: pd.Series, year: int) -> Dict:
         members.append(child_id)
 
     # Add additional household members for SNAP (beyond tax unit)
-    extra_members = row["household_size"] - len(members)
+    extra_members = household_size - len(members)
     for i in range(extra_members):
         extra_id = f"extra_{i}"
         people[extra_id] = {
@@ -177,7 +266,7 @@ def _run_single_pe_simulation(row: pd.Series, year: int) -> Dict:
         }
         members.append(extra_id)
 
-    filing_status = "JOINT" if row["is_joint"] else "SINGLE"
+    filing_status = "JOINT" if is_joint else "SINGLE"
 
     situation = {
         "people": people,
@@ -192,7 +281,7 @@ def _run_single_pe_simulation(row: pd.Series, year: int) -> Dict:
         "households": {
             "household": {
                 "members": members,
-                "state_code": {year: row["state_code"]},
+                "state_code": {year: state_code},
             }
         },
     }
@@ -223,12 +312,20 @@ def run_both(
     Returns:
         Merged DataFrame with both sets of results
     """
-    rac_results = run_rac(df, show_progress)
+    rac_results = run_rac(df, show_progress=show_progress)
     pe_results = run_policyengine(df, year, show_progress)
 
     # Merge results
     merged = df.merge(rac_results, on="household_id")
     merged = merged.merge(pe_results, on="household_id")
+    merged.attrs["rac_execution_mode"] = rac_results.attrs.get(
+        "rac_execution_mode",
+        "unknown",
+    )
+    merged.attrs["policyengine_execution_mode"] = pe_results.attrs.get(
+        "policyengine_execution_mode",
+        "unknown",
+    )
 
     return merged
 
@@ -240,84 +337,43 @@ def run_both(
 
 def run_rac_vectorized(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Run RAC calculators vectorized on full DataFrame.
+    Run compiled RAC examples over a full DataFrame batch.
 
-    Much faster than row-by-row iteration.
+    Uses the generic lowered-program batch executor for the current validated
+    subset instead of handwritten vectorized formulas.
     """
-    _n = len(df)  # noqa: F841
-
-    # Vectorized EITC
-    earned = df["earned_income"].values
-    agi = df["agi"].values
-    n_children = np.minimum(df["n_children"].values, 3)  # Cap at 3
-    is_joint = df["is_joint"].values
-
-    # Get parameters per household based on n_children
-    credit_pct = np.array([EITC_PARAMS["credit_pct"][nc] / 100 for nc in n_children])
-    phaseout_pct = np.array(
-        [EITC_PARAMS["phaseout_pct"][nc] / 100 for nc in n_children]
+    programs = _load_lowered_validation_programs()
+    eitc_results = execute_lowered_program_batch(
+        programs.eitc,
+        df[["earned_income", "agi", "n_children", "is_joint"]],
     )
-    earned_amount = np.array(
-        [EITC_PARAMS["earned_income_amount"][nc] for nc in n_children]
-    )
-    phaseout_start = np.where(
-        is_joint,
-        np.array([EITC_PARAMS["phaseout_joint"][nc] for nc in n_children]),
-        np.array([EITC_PARAMS["phaseout_single"][nc] for nc in n_children]),
-    )
-
-    credit_base = credit_pct * np.minimum(earned, earned_amount)
-    income_for_phaseout = np.maximum(agi, earned)
-    excess = np.maximum(0, income_for_phaseout - phaseout_start)
-    phaseout = phaseout_pct * excess
-    eitc = np.round(np.maximum(0, credit_base - phaseout)).astype(int)
-
-    # Vectorized CTC
-    n_qual_children = df["n_children"].values
-    ctc_base = n_qual_children * CTC_PARAMS["credit_per_child"]
-    ctc_phaseout_start = np.where(
-        is_joint,
-        CTC_PARAMS["phaseout_joint"],
-        CTC_PARAMS["phaseout_single"],
-    )
-    ctc_excess = np.maximum(0, agi - ctc_phaseout_start)
-    ctc_reduction = np.ceil(ctc_excess / 1000) * CTC_PARAMS["phaseout_rate"]
-    ctc = np.round(np.maximum(0, ctc_base - ctc_reduction)).astype(int)
-
-    # Vectorized ACTC
-    earned_above = np.maximum(0, earned - CTC_PARAMS["refundable_threshold"])
-    refundable_by_earnings = earned_above * CTC_PARAMS["refundable_rate"] / 100
-    max_refundable = n_qual_children * CTC_PARAMS["refundable_max"]
-    actc = np.round(np.minimum(refundable_by_earnings, max_refundable)).astype(int)
-
-    # Vectorized SNAP
-    hh_size = np.minimum(df["household_size"].values, 8)
-    gross_monthly = df["gross_monthly_income"].values
-
-    max_allotment = np.array([SNAP_PARAMS["max_allotment"][h] for h in hh_size])
-    std_deduction = np.array([SNAP_PARAMS["standard_deduction"][h] for h in hh_size])
-    net_income = np.maximum(0, gross_monthly - std_deduction)
-    net_limit = np.array([SNAP_PARAMS["net_income_limit"][h] for h in hh_size])
-    is_eligible = net_income <= net_limit
-
-    reduction = net_income * SNAP_PARAMS["benefit_reduction_rate"] / 100
-    benefit = np.maximum(0, max_allotment - reduction)
-    min_benefit = np.where(hh_size <= 2, SNAP_PARAMS["min_benefit"], 0)
-    snap = np.where(
-        is_eligible,
-        np.round(np.maximum(benefit, min_benefit)),
-        0,
-    ).astype(int)
-
-    return pd.DataFrame(
+    ctc_results = execute_lowered_program_batch(
+        programs.ctc,
         {
-            "household_id": df["household_id"],
-            "rac_eitc": eitc,
-            "rac_ctc": ctc,
-            "rac_actc": actc,
-            "rac_snap": snap,
+            "n_qualifying_children": df["n_children"].to_numpy(),
+            "agi": df["agi"].to_numpy(),
+            "is_joint": df["is_joint"].to_numpy(),
+            "earned_income": df["earned_income"].to_numpy(),
+        },
+    )
+    snap_results = execute_lowered_program_batch(
+        programs.snap,
+        {
+            "household_size": df["household_size"].to_numpy(),
+            "gross_income": df["gross_monthly_income"].to_numpy(),
+        },
+    )
+    results_df = pd.DataFrame(
+        {
+            "household_id": df["household_id"].to_numpy(),
+            "rac_eitc": eitc_results["eitc"].to_numpy(),
+            "rac_ctc": ctc_results["ctc"].to_numpy(),
+            "rac_actc": ctc_results["actc"].to_numpy(),
+            "rac_snap": snap_results["snap_benefit"].to_numpy(),
         }
     )
+    results_df.attrs["rac_execution_mode"] = "compiled_batch"
+    return results_df
 
 
 def run_policyengine_microsim(year: int = 2025) -> pd.DataFrame:
@@ -487,27 +543,17 @@ def run_both_vectorized(year: int = 2025) -> pd.DataFrame:
 
     spm_df = pd.DataFrame(spm_records)
 
-    # Run RAC SNAP on SPM units
-    print("\nRunning RAC SNAP (vectorized)...")
-    hh_size = np.minimum(spm_df["household_size"].values, 8)
-    gross_monthly = spm_df["gross_monthly_income"].values
-
-    max_allotment = np.array([SNAP_PARAMS["max_allotment"][h] for h in hh_size])
-    std_deduction = np.array([SNAP_PARAMS["standard_deduction"][h] for h in hh_size])
-    net_income = np.maximum(0, gross_monthly - std_deduction)
-    net_limit = np.array([SNAP_PARAMS["net_income_limit"][h] for h in hh_size])
-    is_eligible = net_income <= net_limit
-
-    reduction = net_income * SNAP_PARAMS["benefit_reduction_rate"] / 100
-    benefit = np.maximum(0, max_allotment - reduction)
-    min_benefit = np.where(hh_size <= 2, SNAP_PARAMS["min_benefit"], 0)
-    rac_snap = np.where(
-        is_eligible,
-        np.round(np.maximum(benefit, min_benefit)),
-        0,
-    ).astype(int)
-
-    spm_df["rac_snap"] = rac_snap
+    # Run compiled RAC SNAP on SPM units
+    print("\nRunning RAC SNAP (compiled batch)...")
+    programs = _load_lowered_validation_programs()
+    snap_results = execute_lowered_program_batch(
+        programs.snap,
+        {
+            "household_size": spm_df["household_size"].to_numpy(),
+            "gross_income": spm_df["gross_monthly_income"].to_numpy(),
+        },
+    )
+    spm_df["rac_snap"] = snap_results["snap_benefit"].to_numpy()
 
     # ==========================================================================
     # RUN RAC ON TAX UNITS
@@ -532,5 +578,7 @@ def run_both_vectorized(year: int = 2025) -> pd.DataFrame:
 
     # Store SPM results as attribute for separate SNAP validation
     tu_merged.attrs["spm_snap_data"] = spm_df
+    tu_merged.attrs["rac_execution_mode"] = "compiled_batch"
+    tu_merged.attrs["policyengine_execution_mode"] = "policyengine_microsim"
 
     return tu_merged
