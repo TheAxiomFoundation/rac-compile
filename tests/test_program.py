@@ -177,6 +177,92 @@ need_standard:
             "need_standard"
         ] == 999
 
+    def test_load_rac_program_supports_multiline_expression_continuations(
+        self, tmp_path
+    ):
+        """Bare expression lines can continue across multiple lines at one indent."""
+        entry = tmp_path / "flag.rac"
+        entry.write_text(
+            """
+a:
+  entity: Person
+  period: Month
+  dtype: Boolean
+
+b:
+  entity: Person
+  period: Month
+  dtype: Boolean
+
+flag:
+  entity: Person
+  period: Month
+  dtype: Boolean
+  from 2026-01-01:
+    a and
+    b
+"""
+        )
+
+        namespace = {}
+        code = load_rac_program(entry).to_python_generator().generate()
+
+        exec(code, namespace)
+
+        assert namespace["calculate"](a=True, b=True)["flag"] is True
+        assert namespace["calculate"](a=True, b=False)["flag"] is False
+
+    def test_load_rac_program_supports_inline_if_elif_else_statements(
+        self, tmp_path
+    ):
+        """Single-line `if` / `elif` / `else` branches normalize into real blocks."""
+        entry = tmp_path / "phaseout_percentage.rac"
+        entry.write_text(
+            """
+qualifying_child_count:
+  entity: TaxUnit
+  period: Year
+  dtype: Integer
+
+phaseout_pct_no_children:
+  from 2009-01-01: 0.0765
+
+phaseout_pct_1_child:
+  from 2009-01-01: 0.1598
+
+phaseout_pct_2_children:
+  from 2009-01-01: 0.2106
+
+phaseout_pct_3_plus_children:
+  from 2009-01-01: 0.2106
+
+phaseout_percentage:
+  entity: TaxUnit
+  period: Year
+  dtype: Rate
+  from 2009-01-01:
+    if qualifying_child_count >= 3: phaseout_pct_3_plus_children
+    elif qualifying_child_count == 2: phaseout_pct_2_children
+    elif qualifying_child_count == 1: phaseout_pct_1_child
+    else: phaseout_pct_no_children
+"""
+        )
+
+        namespace = {}
+        code = load_rac_program(entry).to_python_generator().generate()
+
+        exec(code, namespace)
+
+        assert namespace["calculate"](qualifying_child_count=0)[
+            "phaseout_percentage"
+        ] == 0.0765
+        assert namespace["calculate"](qualifying_child_count=2)[
+            "phaseout_percentage"
+        ] == 0.2106
+        assert namespace["calculate"](qualifying_child_count=4)[
+            "phaseout_percentage"
+        ] == 0.2106
+
     def test_load_rac_program_compiles_cross_file_dependencies(self, tmp_path):
         """Entry files can compile imported helper variables and parameters."""
         shared = tmp_path / "shared.rac"
@@ -253,6 +339,82 @@ first_reduction:
             "statute_26_62_62_adjusted_gross_income"
         ]
         assert lowered.outputs[0].module_identity == "statute/26/21/a/2/A"
+
+    def test_load_rac_program_resolves_root_qualified_top_level_imports(
+        self, tmp_path
+    ):
+        """Top-level `imports:` blocks can target root-qualified citation paths."""
+        dependency_root = tmp_path / "statute" / "crs" / "26-2-703"
+        dependency_root.mkdir(parents=True)
+        (dependency_root / "12.rac").write_text(
+            """
+contract_is_entered_into_by_participant_and_county_department:
+  entity: Person
+  period: Month
+  dtype: Boolean
+
+contract_is_pursuant_to_section_26_2_708:
+  entity: Person
+  period: Month
+  dtype: Boolean
+
+is_individual_responsibility_contract:
+  entity: Person
+  period: Month
+  dtype: Boolean
+  from 2026-04-03:
+    contract_is_entered_into_by_participant_and_county_department and
+    contract_is_pursuant_to_section_26_2_708
+"""
+        )
+        entry_root = tmp_path / "statute" / "crs" / "26-2-711" / "1" / "a"
+        entry_root.mkdir(parents=True)
+        entry = entry_root / "I.rac"
+        entry.write_text(
+            """
+imports:
+  - statute/crs/26-2-703/12#is_individual_responsibility_contract
+
+participant_fails_to_comply_with_terms_and_conditions_of_contract:
+  entity: Person
+  period: Month
+  dtype: Boolean
+
+good_cause_exists_as_determined_by_county:
+  entity: Person
+  period: Month
+  dtype: Boolean
+
+participant_is_subject_to_sanction_for_noncompliance_with_individual_responsibility_contract:
+  entity: Person
+  period: Month
+  dtype: Boolean
+  from 2026-04-03:
+    participant_fails_to_comply_with_terms_and_conditions_of_contract and
+    is_individual_responsibility_contract and
+    not good_cause_exists_as_determined_by_county
+"""
+        )
+
+        lowered = load_rac_program(entry).to_lowered_program(
+            outputs=[
+                "participant_is_subject_to_sanction_for_noncompliance_with_individual_responsibility_contract"
+            ]
+        )
+
+        assert {
+            compiled_input.name for compiled_input in lowered.inputs
+        } == {
+            "participant_fails_to_comply_with_terms_and_conditions_of_contract",
+            "good_cause_exists_as_determined_by_county",
+            "statute_crs_26_2_703_12_contract_is_entered_into_by_participant_and_county_department",
+            "statute_crs_26_2_703_12_contract_is_pursuant_to_section_26_2_708",
+        }
+        assert (
+            "statute_crs_26_2_703_12_is_individual_responsibility_contract"
+            not in {compiled_input.name for compiled_input in lowered.inputs}
+        )
+        assert lowered.outputs[0].module_identity == "statute/crs/26-2-711/1/a/I"
 
     def test_selected_outputs_prune_unreachable_imported_variables(self, tmp_path):
         """Graph pruning excludes unreachable imported variables before validation."""

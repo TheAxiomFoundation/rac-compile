@@ -685,24 +685,76 @@ tax:
             "SNAP-pre-shelter-net-income-under-7-USC-2014-e-6-A.rac"
         ),
         outputs=["snap_net_income_pre_shelter"],
-        inputs={
-            "snap_gross_income": 1000,
-            "snap_standard_deduction": 100,
-            "snap_earned_income_deduction": 50,
-            "snap_dependent_care_deduction": 25,
-            "snap_child_support_deduction": 10,
-            "snap_excess_medical_expense_deduction": 5,
-        },
-        expected_input_names=[
+        forbidden_input_names=[
+            "snap_gross_income",
             "snap_standard_deduction",
             "snap_earned_income_deduction",
             "snap_dependent_care_deduction",
             "snap_child_support_deduction",
             "snap_excess_medical_expense_deduction",
-            "snap_gross_income",
+            "snap_other_applicable_deductions_before_shelter",
         ],
-        forbidden_input_names=["snap_other_applicable_deductions_before_shelter"],
-        expected_outputs={"snap_net_income_pre_shelter": 810},
+        targets=(),
+        live=True,
+    ),
+    HarnessCase(
+        name="live_rac_us_co_regulation_table_support",
+        category="live_stack",
+        description=(
+            "Real state regulation files should compile multiline inline-condition "
+            "tables without flattening them by hand."
+        ),
+        workspace_entrypoint="rac-us-co/regulation/9-CCR-2503-6/3.606.1/F.rac",
+        outputs=["need_standard_for_assistance_unit"],
+        inputs={
+            "number_of_children_in_assistance_unit": 2,
+            "number_of_caretakers_in_assistance_unit": 1,
+        },
+        expected_input_names=[
+            "number_of_children_in_assistance_unit",
+            "number_of_caretakers_in_assistance_unit",
+        ],
+        expected_output_module_identities={
+            "need_standard_for_assistance_unit": "regulation/9-CCR-2503-6/3.606.1/F"
+        },
+        expected_outputs={"need_standard_for_assistance_unit": 421},
+        live=True,
+    ),
+    HarnessCase(
+        name="live_rac_us_co_regulation_import_graph_resolution",
+        category="live_stack",
+        description=(
+            "State regulation imports should resolve through the file graph instead "
+            "of surfacing imported computed rules as free inputs."
+        ),
+        workspace_entrypoint="rac-us-co/regulation/9-CCR-2503-6/3.606.1/H.rac",
+        outputs=["meets_gross_income_need_standard_test"],
+        forbidden_input_names=["need_standard_for_assistance_unit"],
+        expected_output_module_identities={
+            "meets_gross_income_need_standard_test": "regulation/9-CCR-2503-6/3.606.1/H"
+        },
+        targets=(),
+        live=True,
+    ),
+    HarnessCase(
+        name="live_rac_us_co_statute_import_graph_resolution",
+        category="live_stack",
+        description=(
+            "State statute imports should resolve root-qualified `imports:` blocks "
+            "without surfacing imported computed rules as free inputs."
+        ),
+        workspace_entrypoint="rac-us-co/statute/crs/26-2-711/1/a/I.rac",
+        outputs=[
+            "participant_is_subject_to_sanction_for_noncompliance_with_individual_responsibility_contract"
+        ],
+        forbidden_input_names=["is_individual_responsibility_contract"],
+        expected_output_module_identities={
+            (
+                "participant_is_subject_to_sanction_for_noncompliance_with_"
+                "individual_responsibility_contract"
+            ): "statute/crs/26-2-711/1/a/I"
+        },
+        targets=(),
         live=True,
     ),
 )

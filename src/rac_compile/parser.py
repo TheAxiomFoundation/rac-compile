@@ -505,6 +505,13 @@ def parse_rac(content: str, origin: Path | str | None = None) -> RacFile:
                 "using .rac blocks such as 'source:' and 'name:'."
             )
 
+        if stripped == "imports:":
+            i, import_specs = _parse_variable_imports_block(lines, i + 1)
+            for import_spec in import_specs:
+                result.imports.append(import_spec.path)
+                result.import_specs.append(import_spec)
+            continue
+
         import_match = _IMPORT_PATTERN.match(stripped)
         if import_match:
             import_path = import_match.group(1)

@@ -667,8 +667,20 @@ def _resolve_citation_relative_import_path(
     if candidate.is_absolute() or import_path.startswith(".") or candidate.suffix:
         return None
 
+    root_names = ("statute", "regulation", "legislation")
     importer_parts = importer.resolve().parts
-    for root_name in ("statute", "regulation", "legislation"):
+    candidate_parts = candidate.parts
+    if candidate_parts and candidate_parts[0] in root_names:
+        anchor_indices = [
+            importer_parts.index(anchor)
+            for anchor in (*root_names, "source", "external", "usda")
+            if anchor in importer_parts
+        ]
+        if anchor_indices:
+            repo_root = Path(*importer_parts[: min(anchor_indices)])
+            return (repo_root / candidate).with_suffix(".rac").resolve()
+
+    for root_name in root_names:
         if root_name not in importer_parts:
             continue
         root_index = importer_parts.index(root_name)

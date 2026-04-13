@@ -102,6 +102,7 @@ class TestCompilerHarness:
         ]
 
         assert summary.total == len(default_cases) + len(live_cases)
+        assert summary.failed == 0
         assert "live_stack" in summary.by_category
 
     def test_run_compiler_harness_autorac_inline_live_case(self):
@@ -123,6 +124,16 @@ class TestCompilerHarness:
         assert summary.total == 1
         assert summary.passed == 1
         assert summary.results[0].case == "live_autorac_source_import_resolution"
+
+    def test_run_compiler_harness_rac_us_co_regulation_live_case(self):
+        """The live lane can compile a real state regulation table file."""
+        summary = run_compiler_harness(
+            case_names=["live_rac_us_co_regulation_table_support"]
+        )
+
+        assert summary.total == 1
+        assert summary.passed == 1
+        assert summary.results[0].case == "live_rac_us_co_regulation_table_support"
 
     def test_run_case_workspace_case_skips_when_repo_is_missing(self, monkeypatch):
         """Missing sibling live repos skip cleanly for opt-in workspace cases."""

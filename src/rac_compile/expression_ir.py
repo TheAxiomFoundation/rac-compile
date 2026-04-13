@@ -868,7 +868,9 @@ def _normalize_formula_block(formula: str) -> str:
     stripped_lines = [
         _strip_formula_comment(raw_line) for raw_line in formula.splitlines()
     ]
-    for line in _collapse_inline_if_formula_lines(stripped_lines):
+    expanded_lines = _expand_inline_if_statement_lines(stripped_lines)
+    collapsed_lines = _collapse_inline_if_formula_lines(expanded_lines)
+    for line in _collapse_expression_continuation_lines(collapsed_lines):
         if not line.strip():
             normalized_lines.append("")
             continue
@@ -957,6 +959,64 @@ def _collapse_inline_if_formula_lines(lines: list[str]) -> list[str]:
     return collapsed
 
 
+def _expand_inline_if_statement_lines(lines: list[str]) -> list[str]:
+    """Expand one-line `if` / `elif` / `else` statements into block form."""
+    expanded: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            expanded.append(line)
+            continue
+
+        indent = line[: len(line) - len(line.lstrip())]
+        inline = _split_inline_if_statement(stripped)
+        if inline is None:
+            expanded.append(line)
+            continue
+        header, body = inline
+        expanded.append(indent + header)
+        expanded.append(indent + "    " + body)
+    return expanded
+
+
+def _collapse_expression_continuation_lines(lines: list[str]) -> list[str]:
+    """Collapse same-indent expression continuations into one normalized line."""
+    collapsed: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        stripped = line.strip()
+        if not stripped:
+            collapsed.append(line)
+            index += 1
+            continue
+
+        indent = line[: len(line) - len(line.lstrip())]
+        if not _is_expression_continuation_candidate(stripped):
+            collapsed.append(line)
+            index += 1
+            continue
+
+        parts = [stripped]
+        next_index = index + 1
+        while next_index < len(lines):
+            next_line = lines[next_index]
+            next_stripped = next_line.strip()
+            if not next_stripped:
+                break
+            next_indent = next_line[: len(next_line) - len(next_line.lstrip())]
+            if next_indent != indent:
+                break
+            if not _is_expression_continuation_candidate(next_stripped):
+                break
+            parts.append(next_stripped)
+            next_index += 1
+
+        collapsed.append(indent + " ".join(parts))
+        index = next_index
+    return collapsed
+
+
 def _inline_if_expects_continuation(expression: str) -> bool:
     """Return whether an inline RAC conditional still needs its else branch."""
     return expression.strip().startswith("if ") and expression.rstrip().endswith(
@@ -964,21 +1024,51 @@ def _inline_if_expects_continuation(expression: str) -> bool:
     )
 
 
+def _split_inline_if_statement(expression: str) -> tuple[str, str] | None:
+    """Split a one-line statement-form conditional into header and body."""
+    stripped = expression.strip()
+    if _is_inline_if_expression(stripped):
+        return None
+
+    for keyword in ("if", "elif"):
+        prefix = f"{keyword} "
+        if stripped.startswith(prefix):
+            colon_index = _find_top_level_colon(stripped, start_index=len(prefix))
+            if colon_index == -1 or colon_index == len(stripped) - 1:
+                return None
+            return stripped[: colon_index + 1], stripped[colon_index + 1 :].strip()
+
+    if stripped.startswith("else:") and stripped != "else:":
+        return "else:", stripped[len("else:") :].strip()
+
+    return None
+
+
+def _is_inline_if_expression(expression: str) -> bool:
+    """Return whether a line uses inline RAC conditional expression syntax."""
+    stripped = expression.strip()
+    if not stripped.startswith("if "):
+        return False
+    condition_colon = _find_top_level_colon(stripped, start_index=len("if "))
+    if condition_colon == -1:
+        return False
+    return _find_top_level_else_marker(
+        stripped,
+        start_index=condition_colon + 1,
+    ) != -1
+
+
 def _convert_inline_if_expression(expression: str) -> str:
     """Convert `if cond: a else: b` RAC syntax into Python ternary syntax."""
     stripped = expression.strip()
-    if not stripped.startswith("if "):
+    if not _is_inline_if_expression(stripped):
         return expression
 
     condition_colon = _find_top_level_colon(stripped, start_index=len("if "))
-    if condition_colon == -1:
-        return expression
     else_marker = _find_top_level_else_marker(
         stripped,
         start_index=condition_colon + 1,
     )
-    if else_marker == -1:
-        return expression
 
     condition = stripped[len("if ") : condition_colon].strip()
     if_true = stripped[condition_colon + 1 : else_marker].strip()
@@ -1169,6 +1259,22 @@ def _find_top_level_else_marker(expression: str, start_index: int = 0) -> int:
             return index
         index += 1
     return -1
+
+
+def _is_expression_continuation_candidate(line: str) -> bool:
+    """Return whether a formula line is part of a bare expression sequence."""
+    stripped = line.strip()
+    assignment_candidate = stripped
+    if assignment_candidate.startswith("let "):
+        assignment_candidate = assignment_candidate[len("let ") :].strip()
+
+    if stripped.startswith("return "):
+        return False
+    if stripped == "else:":
+        return False
+    if stripped.endswith(":") and not _is_inline_if_expression(stripped):
+        return False
+    return _ASSIGNMENT_PATTERN.fullmatch(assignment_candidate) is None
 
 
 def _attribute_to_name(node: ast.Attribute, original: str, variable_name: str) -> str:

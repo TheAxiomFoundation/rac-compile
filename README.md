@@ -200,6 +200,7 @@ The generic `rac-compile compile` path now shares one parsed compile model for J
 - Supported: lowered bundle emission via `rac-compile lower`, producing a serializable post-resolution artifact with explicit inputs, typed parameters, typed ordered computations, and typed public outputs
 - Supported: Rust output via `rac-compile compile ... --rust`, using the same lowered bundle as JS/Python for the validated numeric/boolean subset
 - Supported: local file imports written as `import "./shared.rac"` or `import "../common/base.rac"`, with graph-wide reachability pruning from the selected outputs
+- Supported: spec-style top-level or per-rule `imports:` blocks using `path#symbol` syntax, including root-qualified paths like `statute/...` and `regulation/...`
 - Supported: bare imports like `from "tax/shared.rac" import rate` when resolved through `rac.toml` module roots or repeated `--module-root DIR`
 - Supported: stable workspace package aliases through `rac.toml` `[module_resolution.packages]` or repeated `--package NAME=DIR`
 - Supported: import aliases written as `import "./shared.rac" as shared`, with module-qualified references like `shared.rate`
@@ -297,7 +298,7 @@ failing case first and then make it pass.
 - Use `rac-compile harness --json` for machine-readable output
 - Use repeated `--case NAME` to run a focused subset while developing a feature
 - The harness now also validates Rust when `rustc` is available locally
-- `rac-compile harness --include-live` opts into curated real-file compatibility checks against sibling repos such as `rac-us` and current AutoRAC artifacts
+- `rac-compile harness --include-live` opts into curated real-file compatibility checks against sibling repos such as `rac-us`, `rac-us-co`, and current AutoRAC artifacts
 - `rac-compile harness --include-external` opts into PolicyEngine-backed oracle cases when `policyengine-us` is installed
 
 ### Validation

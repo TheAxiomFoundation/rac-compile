@@ -352,6 +352,29 @@ import "./base.rac"
         assert result.import_specs[1].path == "./base.rac"
         assert result.import_specs[1].alias is None
 
+    def test_parse_rac_collects_top_level_spec_style_imports(self, tmp_path):
+        """Top-level `imports:` blocks are preserved for live-stack RAC files."""
+        origin = tmp_path / "main.rac"
+        result = parse_rac(
+            """
+imports:
+  - statute/crs/26-2-703/12#is_individual_responsibility_contract
+  - regulation/9-CCR-2503-6/3.606.1/F#need_standard_for_assistance_unit
+""",
+            origin=origin,
+        )
+
+        assert result.imports == [
+            "statute/crs/26-2-703/12",
+            "regulation/9-CCR-2503-6/3.606.1/F",
+        ]
+        assert result.import_specs[0].symbols[0].name == (
+            "is_individual_responsibility_contract"
+        )
+        assert result.import_specs[1].symbols[0].name == (
+            "need_standard_for_assistance_unit"
+        )
+
     def test_parse_selective_imports_exports_and_re_exports(self, tmp_path):
         """Selective imports, exports, and re-exports are preserved."""
         origin = tmp_path / "main.rac"
