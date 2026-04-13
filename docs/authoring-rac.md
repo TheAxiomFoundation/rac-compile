@@ -8,8 +8,7 @@ current `rac-compile` pipeline.
 A `.rac` file is made of:
 
 - an optional top-level `source:` metadata block
-- parameter definitions
-- variable definitions
+- top-level rule definitions
 - optional imports / exports
 
 For canonical RAC trees, use citation paths like `statute/26/32/c/2/A.rac` or
@@ -52,9 +51,10 @@ The more representative policy examples are:
 - `/Users/maxghenis/TheAxiomFoundation/rac-compile/examples/snap.rac`
 - `/Users/maxghenis/TheAxiomFoundation/rac-compile/examples/working_families/benefit_amount.rac`
 
-## Parameters
+## External Scalar And Table Rules
 
-Parameters are top-level names with either inline values or an external source.
+RAC source files use one top-level rule shape. Some of those rules behave as
+external scalar values or lookup tables rather than computed formulas.
 
 Inline scalar parameter:
 
@@ -77,25 +77,28 @@ credit_pct:
     3: 45
 ```
 
-Source-only parameter:
+Source-only external rule:
 
 ```rac
 rate:
   source: "external/rate"
 ```
 
-Source-only parameters must be bound explicitly at compile time with
+Source-only external rules must be bound explicitly at compile time with
 `--parameter` or `--parameter-file`. For imported source-only parameters, use
 `module_identity.symbol`.
 
-## Variables
+## Computed Rules
 
-Variables are the compiled computations. They should include:
+Computed rules are the compiled formulas. Entity-scoped rules usually include:
 
 - `entity`
 - `period`
 - `dtype`
 - one or more `from YYYY-MM-DD:` formula bodies
+
+Scalar computed rules can omit `entity` when they behave like derived helper
+values or statute-level scalar concepts.
 
 Real policy-style example:
 
@@ -111,6 +114,19 @@ eitc:
     n = min(n_children, 3)
     credit_pct_rate = credit_pct[n] / 100
     return round(max(0, earned_income * credit_pct_rate))
+```
+
+Scalar computed example:
+
+```rac
+snap_self_employment_cost_exclusion:
+  label: "SNAP self-employment cost exclusion"
+  description: "Reduction for production costs"
+  from 2008-10-01:
+    min(
+      snap_nonfarm_self_employment_production_costs,
+      snap_nonfarm_self_employment_gross_income,
+    ) + snap_farm_self_employment_production_costs
 ```
 
 ## Supported formula subset

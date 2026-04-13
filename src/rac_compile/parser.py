@@ -79,6 +79,7 @@ class ReExportSpec:
 class ParameterDef:
     """Parsed parameter definition."""
 
+    name: str = ""
     symbol_name: str = ""
     source: str = ""
     values: dict[int, float] = field(default_factory=dict)
@@ -99,6 +100,10 @@ class VariableBlock:
     period: Optional[str] = None
     dtype: Optional[str] = None
     label: Optional[str] = None
+    description: Optional[str] = None
+    unit: Optional[str] = None
+    reference: Optional[str] = None
+    source: str = ""
     default: Any = None
     import_specs: list[ImportSpec] = field(default_factory=list)
     formula: str = ""
@@ -119,6 +124,61 @@ class VariableBlock:
         return ""
 
 
+@dataclass(frozen=True)
+class RuleDecl:
+    """Unified parsed rule view used by the compiler surface."""
+
+    name: str
+    symbol_name: str = ""
+    entity: Optional[str] = None
+    period: Optional[str] = None
+    dtype: Optional[str] = None
+    label: Optional[str] = None
+    description: Optional[str] = None
+    unit: Optional[str] = None
+    reference: Optional[str] = None
+    source: str = ""
+    default: Any = None
+    import_specs: tuple[ImportSpec, ...] = ()
+    temporal: tuple[TemporalEntry, ...] = ()
+    values: dict[int, float] = field(default_factory=dict)
+    source_citation: str = ""
+    module_identity: str = ""
+    declared_as: str = ""
+
+    @property
+    def effective_formula(self) -> str:
+        """Return formula-like code when this rule is computed."""
+        code_entries = [entry for entry in self.temporal if entry.code]
+        if code_entries:
+            return max(code_entries, key=lambda entry: entry.from_date).code or ""
+        return ""
+
+    @property
+    def has_formula(self) -> bool:
+        """Return whether this rule compiles as a computed formula."""
+        return bool(self.effective_formula.strip())
+
+    @property
+    def is_external_rule(self) -> bool:
+        """Return whether this rule behaves like an external scalar or table value."""
+        return not self.has_formula and (
+            self.source
+            or self.values
+            or any(entry.value is not None for entry in self.temporal)
+        )
+
+    @property
+    def is_input_rule(self) -> bool:
+        """Return whether this rule behaves like a free calculator input."""
+        return not self.has_formula and not self.is_external_rule
+
+    @property
+    def is_computed_rule(self) -> bool:
+        """Return whether this rule compiles from code."""
+        return self.has_formula
+
+
 @dataclass
 class RacFile:
     """Parsed .rac file."""
@@ -132,6 +192,7 @@ class RacFile:
     re_export_specs: list[ReExportSpec] = field(default_factory=list)
     parameters: dict[str, ParameterDef] = field(default_factory=dict)
     variables: list[VariableBlock] = field(default_factory=list)
+    rules: list[RuleDecl] = field(default_factory=list)
     origin: Path | None = None
     module_identity: str = ""
 
@@ -139,6 +200,28 @@ class RacFile:
     def resolved_module_identity(self) -> str:
         """Return the stable rule/module identity for this file."""
         return self.module_identity or _derive_module_identity(self.origin)
+
+    @property
+    def rule_decls(self) -> list[RuleDecl]:
+        """Return unified parsed rules, preserving parse order when available."""
+        if self.rules:
+            return list(self.rules)
+        return _definitions_to_rule_decls([*self.parameters.values(), *self.variables])
+
+    @property
+    def computed_rules(self) -> list[RuleDecl]:
+        """Return the parsed rules that compile as formulas."""
+        return [rule for rule in self.rule_decls if rule.is_computed_rule]
+
+    @property
+    def external_rules(self) -> list[RuleDecl]:
+        """Return the parsed rules that behave as external scalar or table values."""
+        return [rule for rule in self.rule_decls if rule.is_external_rule]
+
+    @property
+    def input_rules(self) -> list[RuleDecl]:
+        """Return the parsed rules that behave as free inputs."""
+        return [rule for rule in self.rule_decls if rule.is_input_rule]
 
     def resolve_output_bindings(
         self,
@@ -149,13 +232,9 @@ class RacFile:
 
         variable_names = [variable.name for variable in self.variables]
         variable_set = set(variable_names)
-        output_variable_names = [
-            variable.name
-            for variable in self.variables
-            if variable.effective_formula.strip()
-        ]
+        output_variable_names = [rule.name for rule in self.computed_rules]
         output_variable_set = set(output_variable_names)
-        symbol_names = variable_set | set(self.parameters)
+        symbol_names = {rule.name for rule in self.rule_decls}
 
         if self.export_specs:
             exported_bindings: dict[str, str] = {}
@@ -230,20 +309,21 @@ class RacFile:
         if not normalized:
             return {}
 
-        exact_names = set(self.parameters)
+        external_rules = {rule.name: rule for rule in self.external_rules}
+        exact_names = set(external_rules)
         qualified_targets: dict[str, str] = {}
         bare_targets: dict[str, list[str]] = {}
         available_targets: dict[str, tuple[str, str]] = {}
-        for internal_name, parameter in self.parameters.items():
-            symbol_name = parameter.symbol_name or internal_name
+        for internal_name, rule in external_rules.items():
+            symbol_name = rule.symbol_name or internal_name
             bare_targets.setdefault(symbol_name, []).append(internal_name)
             available_targets[internal_name] = (
-                parameter.module_identity,
+                rule.module_identity,
                 symbol_name,
             )
-            if parameter.module_identity:
+            if rule.module_identity:
                 qualified_targets[
-                    f"{parameter.module_identity}.{symbol_name}"
+                    f"{rule.module_identity}.{symbol_name}"
                 ] = internal_name
 
         resolved: dict[str, ParameterBinding] = {}
@@ -379,6 +459,7 @@ def parse_rac(content: str, origin: Path | str | None = None) -> RacFile:
 
     lines = content.split("\n")
     i = 0
+    parsed_definitions: list[ParameterDef | VariableBlock] = []
 
     while i < len(lines):
         line = lines[i]
@@ -485,6 +566,7 @@ def parse_rac(content: str, origin: Path | str | None = None) -> RacFile:
                 result.parameters[name] = definition
             elif isinstance(definition, VariableBlock):
                 result.variables.append(definition)
+            parsed_definitions.append(definition)
             continue
 
         i += 1
@@ -493,6 +575,8 @@ def parse_rac(content: str, origin: Path | str | None = None) -> RacFile:
     result.module_identity = module_identity
     source_citation = result.source.citation if result.source else ""
     for name, parameter in result.parameters.items():
+        if not parameter.name:
+            parameter.name = name
         if not parameter.symbol_name:
             parameter.symbol_name = name
         if not parameter.module_identity:
@@ -504,6 +588,7 @@ def parse_rac(content: str, origin: Path | str | None = None) -> RacFile:
             variable.module_identity = module_identity
         if not variable.source_citation:
             variable.source_citation = source_citation
+    result.rules = _definitions_to_rule_decls(parsed_definitions)
 
     return result
 
@@ -702,7 +787,12 @@ def _parse_unified_definition(
 
         i += 1
 
-    if any(k in attrs for k in ("entity", "period", "dtype", "formula")):
+    has_temporal_code = any(entry.code for entry in temporal)
+    if (
+        any(k in attrs for k in ("entity", "period", "dtype", "formula", "default"))
+        or import_specs
+        or has_temporal_code
+    ):
         if values:
             raise ParserError(
                 f"Variable '{name}' cannot define a parameter values block."
@@ -714,6 +804,10 @@ def _parse_unified_definition(
             period=attrs.get("period"),
             dtype=attrs.get("dtype"),
             label=attrs.get("label"),
+            description=attrs.get("description"),
+            unit=attrs.get("unit"),
+            reference=attrs.get("reference"),
+            source=attrs.get("source", attrs.get("reference", "")),
             default=_parse_default_value(attrs["default"])
             if "default" in attrs
             else None,
@@ -728,6 +822,7 @@ def _parse_unified_definition(
         )
 
     return i, ParameterDef(
+        name=name,
         symbol_name=name,
         source=attrs.get("source", attrs.get("reference", "")),
         description=attrs.get("description"),
@@ -741,6 +836,51 @@ def _parse_unified_definition(
             if entry.value is not None
         },
     )
+
+
+def _definitions_to_rule_decls(
+    definitions: list[ParameterDef | VariableBlock],
+) -> list[RuleDecl]:
+    """Convert parsed definition objects into the unified rule view."""
+    rule_decls: list[RuleDecl] = []
+    for definition in definitions:
+        if isinstance(definition, ParameterDef):
+            rule_decls.append(
+                RuleDecl(
+                    name=definition.name or definition.symbol_name,
+                    symbol_name=definition.symbol_name,
+                    description=definition.description,
+                    unit=definition.unit,
+                    reference=definition.reference,
+                    source=definition.source,
+                    temporal=tuple(definition.temporal),
+                    values=dict(definition.values),
+                    module_identity=definition.module_identity,
+                    declared_as="parameter",
+                )
+            )
+            continue
+        rule_decls.append(
+            RuleDecl(
+                name=definition.name,
+                symbol_name=definition.symbol_name,
+                entity=definition.entity,
+                period=definition.period,
+                dtype=definition.dtype,
+                label=definition.label,
+                description=definition.description,
+                unit=definition.unit,
+                reference=definition.reference,
+                source=definition.source,
+                default=definition.default,
+                import_specs=tuple(definition.import_specs),
+                temporal=tuple(definition.temporal),
+                source_citation=definition.source_citation,
+                module_identity=definition.module_identity,
+                declared_as="variable",
+            )
+        )
+    return rule_decls
 
 
 def _collect_temporal_block(

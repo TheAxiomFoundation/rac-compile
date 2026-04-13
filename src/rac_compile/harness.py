@@ -620,6 +620,26 @@ tax:
         targets=(),
         live=True,
     ),
+    HarnessCase(
+        name="live_rac_us_scalar_computed_rule_support",
+        category="live_stack",
+        description=(
+            "Real rac-us scalar computed rules without an entity should still lower "
+            "as computed outputs."
+        ),
+        workspace_entrypoint="rac-us/statute/7/2014/d.rac",
+        outputs=["snap_self_employment_cost_exclusion"],
+        expected_input_names=[
+            "snap_nonfarm_self_employment_production_costs",
+            "snap_nonfarm_self_employment_gross_income",
+            "snap_farm_self_employment_production_costs",
+        ],
+        expected_output_module_identities={
+            "snap_self_employment_cost_exclusion": "statute/7/2014/d"
+        },
+        targets=(),
+        live=True,
+    ),
 )
 
 

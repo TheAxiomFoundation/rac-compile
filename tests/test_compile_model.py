@@ -89,6 +89,51 @@ is_full_time_student:
         assert module.inputs[0].default == 0
         assert module.inputs[0].python_type == "int"
 
+    def test_scalar_external_rule_with_metadata_compiles_as_parameter(self):
+        """Entity-less scalar rules with metadata stay external values, not inputs."""
+        rac = """
+phase_in_rate:
+  dtype: Rate
+  unit: rate
+  source: "26 USC 32(b)(1)"
+  from 2024-01-01: 0.25
+
+benefit_amount:
+  entity: TaxUnit
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    wages * phase_in_rate
+"""
+        module = parse_rac(rac).to_compile_model()
+
+        assert [compiled_input.name for compiled_input in module.inputs] == ["wages"]
+        assert [parameter.name for parameter in module.parameters] == ["phase_in_rate"]
+        assert [variable.name for variable in module.variables] == ["benefit_amount"]
+
+    def test_scalar_computed_rule_without_entity_compiles_as_output(self):
+        """Entity-less computed live-style rules compile as computed outputs."""
+        rac = """
+snap_self_employment_cost_exclusion:
+  label: "SNAP self-employment cost exclusion"
+  description: "Reduction for production costs"
+  from 2008-10-01:
+    min(
+      snap_nonfarm_self_employment_production_costs,
+      snap_nonfarm_self_employment_gross_income,
+    ) + snap_farm_self_employment_production_costs
+"""
+        lowered = parse_rac(rac).to_lowered_program()
+
+        assert [compiled_input.name for compiled_input in lowered.inputs] == [
+            "snap_nonfarm_self_employment_production_costs",
+            "snap_nonfarm_self_employment_gross_income",
+            "snap_farm_self_employment_production_costs",
+        ]
+        assert [output.name for output in lowered.outputs] == [
+            "snap_self_employment_cost_exclusion"
+        ]
+
     def test_lowered_program_round_trips_and_generates_python(self):
         """Compiled modules can emit and reload a lowered JSON bundle."""
         rac = """

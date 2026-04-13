@@ -232,6 +232,27 @@ is_us_citizen_national_or_resident:
         variable = result.variables[0]
         assert variable.default is False
 
+    def test_scalar_computed_rule_without_entity_stays_variable(self):
+        """Entity-less rules with code blocks stay computed rules, not parameters."""
+        result = parse_rac(
+            """
+snap_self_employment_cost_exclusion:
+  label: "SNAP self-employment cost exclusion"
+  description: "Reduction for production costs"
+  from 2008-10-01:
+    min(
+      snap_nonfarm_self_employment_production_costs,
+      snap_nonfarm_self_employment_gross_income,
+    ) + snap_farm_self_employment_production_costs
+"""
+        )
+
+        assert "snap_self_employment_cost_exclusion" not in result.parameters
+        assert [variable.name for variable in result.variables] == [
+            "snap_self_employment_cost_exclusion"
+        ]
+        assert result.rule_decls[0].is_computed_rule is True
+
     def test_variable_with_multiple_temporal_formulas(self):
         """Variables can define multiple dated formulas."""
         result = parse_rac(

@@ -153,7 +153,8 @@ class RacProgram:
 
             for name, parameter in rac_file.parameters.items():
                 merged.parameters[internal_symbols[origin][name]] = _copy_parameter(
-                    parameter
+                    parameter,
+                    internal_name=internal_symbols[origin][name],
                 )
 
             for variable in rac_file.variables:
@@ -487,9 +488,14 @@ def _merge_selective_import_bindings(
         current_bindings[local_name] = internal_name
 
 
-def _copy_parameter(parameter: ParameterDef) -> ParameterDef:
+def _copy_parameter(
+    parameter: ParameterDef,
+    *,
+    internal_name: str,
+) -> ParameterDef:
     """Copy a parsed parameter definition."""
     return ParameterDef(
+        name=internal_name,
         symbol_name=parameter.symbol_name,
         source=parameter.source,
         values=dict(parameter.values),
@@ -515,6 +521,10 @@ def _copy_variable(
         period=variable.period,
         dtype=variable.dtype,
         label=variable.label,
+        description=variable.description,
+        unit=variable.unit,
+        reference=variable.reference,
+        source=variable.source,
         default=variable.default,
         import_specs=list(variable.import_specs),
         formula=variable.formula,

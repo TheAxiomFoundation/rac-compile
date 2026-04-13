@@ -40,7 +40,7 @@ from .python_generator import PythonCodeGenerator
 from .rust_generator import RustCodeGenerator
 
 if TYPE_CHECKING:
-    from .parser import ParameterDef, RacFile, VariableBlock
+    from .parser import RacFile, RuleDecl, VariableBlock
 
 
 class CompilationError(ValueError):
@@ -648,24 +648,29 @@ class CompiledModule:
     ) -> "CompiledModule":
         """Compile a parsed RAC file into a shared compile model."""
         compile_context = compile_context or CompileContext()
-        all_variable_names = [variable.name for variable in rac_file.variables]
-        declared_inputs = _build_declared_inputs(rac_file.variables, compile_context)
+        rule_decls = rac_file.rule_decls
+        all_rule_names = [rule.name for rule in rule_decls]
+        external_rules = {rule.name: rule for rule in rac_file.external_rules}
+        declared_inputs = _build_declared_inputs(rac_file.input_rules)
+        computed_rule_names = {rule.name for rule in rac_file.computed_rules}
         computed_variables = [
             variable
             for variable in rac_file.variables
-            if variable.name not in declared_inputs
+            if variable.name in computed_rule_names
         ]
         variable_names = [variable.name for variable in computed_variables]
         variable_kind_hints = _build_variable_kind_hints(rac_file.variables)
         parameter_kind_hints = _build_parameter_kind_hints(
-            rac_file.parameters,
+            external_rules,
             compile_context,
         )
-        duplicate_names = sorted(set(all_variable_names) & set(rac_file.parameters))
+        duplicate_names = sorted(
+            name for name in set(all_rule_names) if all_rule_names.count(name) > 1
+        )
         if duplicate_names:
             names = ", ".join(duplicate_names)
             raise CompilationError(
-                f"Parameters and variables cannot share the same name: {names}."
+                f"Rules cannot share the same name: {names}."
             )
 
         source_citation = rac_file.source.citation if rac_file.source else ""
@@ -673,7 +678,7 @@ class CompiledModule:
             compiled_variables = [
                 _compile_variable(
                     variable=variable,
-                    parameter_names=set(rac_file.parameters),
+                    parameter_names=set(external_rules),
                     parameter_kind_hints=parameter_kind_hints,
                     variable_names=set(variable_names),
                     variable_kind_hints=variable_kind_hints,
@@ -705,7 +710,7 @@ class CompiledModule:
         compiled_parameters = [
             _compile_parameter(
                 name,
-                rac_file.parameters[name],
+                external_rules[name],
                 compile_context,
                 lookup_kind=parameter_lookup_contracts[name],
             )
@@ -1109,23 +1114,23 @@ def _build_variable_kind_hints(variables: list[VariableBlock]) -> dict[str, str]
     """Collect declared value-kind hints from parsed variable dtypes."""
     hints: dict[str, str] = {}
     for variable in variables:
-        declared = _declared_variable_value_kind(variable)
+        declared = _declared_rule_value_kind(variable)
         if declared is not None:
             hints[variable.name] = declared
     return hints
 
 
 def _build_parameter_kind_hints(
-    parameters: dict[str, ParameterDef],
+    rules: dict[str, "RuleDecl"],
     compile_context: CompileContext,
 ) -> dict[str, str]:
     """Collect inferred value kinds for parsed parameters."""
     hints: dict[str, str] = {}
-    for name, parameter in parameters.items():
+    for name, rule in rules.items():
         try:
             hints[name] = _resolve_parameter_value_kind(
                 name,
-                parameter,
+                rule,
                 compile_context,
             )
         except CompilationError:
@@ -1137,12 +1142,12 @@ def _build_parameter_kind_hints(
     return hints
 
 
-def _declared_variable_value_kind(variable: VariableBlock) -> str | None:
-    """Map a parsed variable dtype to one lowered value kind."""
-    if not variable.dtype:
+def _declared_rule_value_kind(rule: VariableBlock | "RuleDecl") -> str | None:
+    """Map one parsed rule dtype to one lowered value kind."""
+    if not rule.dtype:
         return None
 
-    normalized = variable.dtype.strip().lower()
+    normalized = rule.dtype.strip().lower()
     if normalized in {"bool", "boolean"}:
         return "boolean"
     if normalized in {"int", "integer", "count", "index"}:
@@ -1171,7 +1176,7 @@ def _resolve_variable_value_kind(
     variable_kind_hints: dict[str, str],
 ) -> str:
     """Resolve one compiled variable's backend-neutral result kind."""
-    declared = _declared_variable_value_kind(variable)
+    declared = _declared_rule_value_kind(variable)
     if declared is not None:
         return declared
     inferred = _analyze_statement_kinds(
@@ -1725,11 +1730,12 @@ def _compile_reachable_variables(
     variable_kind_hints: dict[str, str],
 ) -> list[CompiledVariable]:
     """Compile only variables reachable from the requested outputs."""
-    declared_inputs = _build_declared_inputs(rac_file.variables, compile_context)
+    external_rules = {rule.name: rule for rule in rac_file.external_rules}
+    computed_rule_names = {rule.name for rule in rac_file.computed_rules}
     variables_by_name = {
         variable.name: variable
         for variable in rac_file.variables
-        if variable.name not in declared_inputs
+        if variable.name in computed_rule_names
     }
     unknown = [
         name
@@ -1740,7 +1746,7 @@ def _compile_reachable_variables(
         names = ", ".join(unknown)
         raise CompilationError(f"Unknown output variable(s): {names}.")
 
-    parameter_names = set(rac_file.parameters)
+    parameter_names = set(external_rules)
     variable_names = set(variables_by_name)
     compiled_by_name: dict[str, CompiledVariable] = {}
     pending = list(_ordered_unique(selected_outputs))
@@ -1769,65 +1775,55 @@ def _compile_reachable_variables(
 
 
 def _build_declared_inputs(
-    variables: list[VariableBlock],
-    compile_context: CompileContext,
+    rules: list["RuleDecl"],
 ) -> dict[str, CompiledInput]:
     """Collect typed declared-input rules from parsed variable blocks."""
     return {
-        variable.name: _compile_declared_input(variable)
-        for variable in variables
-        if _is_declared_input_variable(variable, compile_context)
+        rule.name: _compile_declared_input(rule)
+        for rule in rules
     }
 
 
-def _is_declared_input_variable(
-    variable: VariableBlock,
-    compile_context: CompileContext,
-) -> bool:
-    """Return whether a parsed variable should behave as a public input."""
-    return not _resolve_variable_formula(variable, compile_context).strip()
-
-
-def _compile_declared_input(variable: VariableBlock) -> CompiledInput:
+def _compile_declared_input(rule: "RuleDecl") -> CompiledInput:
     """Compile a no-formula variable declaration into one typed public input."""
-    inferred = _infer_input(variable.name)
-    value_kind = _declared_variable_value_kind(variable) or _input_value_kind(inferred)
-    default = _resolve_declared_input_default(variable, value_kind, inferred.default)
+    inferred = _infer_input(rule.name)
+    value_kind = _declared_rule_value_kind(rule) or _input_value_kind(inferred)
+    default = _resolve_declared_input_default(rule, value_kind, inferred.default)
     if value_kind == "boolean":
         return CompiledInput(
-            name=variable.name,
+            name=rule.name,
             default=default,
             js_type="boolean",
             python_type="bool",
         )
     if value_kind == "integer":
         return CompiledInput(
-            name=variable.name,
+            name=rule.name,
             default=default,
             js_type="number",
             python_type="int",
         )
     if value_kind == "number":
         return CompiledInput(
-            name=variable.name,
+            name=rule.name,
             default=default,
             js_type="number",
             python_type="float",
         )
     raise CompilationError(
-        f"Variable '{variable.name}' declares unsupported input dtype "
-        f"'{variable.dtype}'. Generic compilation currently supports only "
+        f"Rule '{rule.name}' declares unsupported input dtype "
+        f"'{rule.dtype}'. Generic compilation currently supports only "
         "boolean and numeric declared inputs."
     )
 
 
 def _resolve_declared_input_default(
-    variable: VariableBlock,
+    rule: "RuleDecl",
     value_kind: str,
     fallback: Any,
 ) -> Any:
     """Normalize one declared input's explicit default or inferred fallback."""
-    default = variable.default
+    default = rule.default
     if default is None:
         return fallback
     if value_kind == "boolean":
@@ -1836,46 +1832,46 @@ def _resolve_declared_input_default(
         if isinstance(default, (int, float)) and default in {0, 1, 0.0, 1.0}:
             return bool(default)
         raise CompilationError(
-            f"Variable '{variable.name}' default must be boolean, got {default!r}."
+            f"Rule '{rule.name}' default must be boolean, got {default!r}."
         )
     if value_kind == "integer":
         if isinstance(default, bool):
             raise CompilationError(
-                f"Variable '{variable.name}' integer default cannot be boolean."
+                f"Rule '{rule.name}' integer default cannot be boolean."
             )
         if isinstance(default, int):
             return default
         if isinstance(default, float) and default.is_integer():
             return int(default)
         raise CompilationError(
-            f"Variable '{variable.name}' default must be an integer, got {default!r}."
+            f"Rule '{rule.name}' default must be an integer, got {default!r}."
         )
     if value_kind == "number":
         if isinstance(default, bool):
             raise CompilationError(
-                f"Variable '{variable.name}' numeric default cannot be boolean."
+                f"Rule '{rule.name}' numeric default cannot be boolean."
             )
         if isinstance(default, (int, float)):
             return default
         raise CompilationError(
-            f"Variable '{variable.name}' default must be numeric, got {default!r}."
+            f"Rule '{rule.name}' default must be numeric, got {default!r}."
         )
     return default
 
 
 def _compile_parameter(
     name: str,
-    parameter: ParameterDef,
+    rule: "RuleDecl",
     compile_context: CompileContext,
     *,
     lookup_kind: str,
 ) -> CompiledParameter:
     """Compile a parameter into a concrete generator-friendly form."""
-    value_kind = _resolve_parameter_value_kind(name, parameter, compile_context)
-    if parameter.temporal:
+    value_kind = _resolve_parameter_value_kind(name, rule, compile_context)
+    if rule.temporal:
         active_entry = _resolve_temporal_entry(
             name,
-            parameter.temporal,
+            list(rule.temporal),
             compile_context,
             subject="Parameter",
         )
@@ -1893,21 +1889,21 @@ def _compile_parameter(
         return CompiledParameter(
             name=name,
             values=values,
-            source=parameter.source,
-            module_identity=parameter.module_identity,
+            source=rule.source,
+            module_identity=rule.module_identity,
             value_kind=value_kind,
             lookup_kind=lookup_kind,
             index_value_kind=_index_value_kind_for_lookup(lookup_kind),
         )
 
-    if parameter.values:
-        values = {index: float(value) for index, value in parameter.values.items()}
+    if rule.values:
+        values = {index: float(value) for index, value in rule.values.items()}
         _validate_parameter_lookup_contract(name, values, lookup_kind)
         return CompiledParameter(
             name=name,
             values=values,
-            source=parameter.source,
-            module_identity=parameter.module_identity,
+            source=rule.source,
+            module_identity=rule.module_identity,
             value_kind=value_kind,
             lookup_kind=lookup_kind,
             index_value_kind=_index_value_kind_for_lookup(lookup_kind),
@@ -1919,14 +1915,14 @@ def _compile_parameter(
         return CompiledParameter(
             name=name,
             values=override_binding.values,
-            source=_bound_parameter_source(parameter.source, override_binding),
-            module_identity=parameter.module_identity,
+            source=_bound_parameter_source(rule.source, override_binding),
+            module_identity=rule.module_identity,
             value_kind=value_kind,
             lookup_kind=lookup_kind,
             index_value_kind=_index_value_kind_for_lookup(lookup_kind),
         )
 
-    binding_target = _parameter_binding_target(name, parameter)
+    binding_target = _parameter_binding_target(name, rule)
     raise CompilationError(
         f"Parameter '{name}' is referenced but has no inline numeric values. "
         "Supply a parameter binding such as --parameter "
@@ -1937,14 +1933,14 @@ def _compile_parameter(
 
 def _resolve_parameter_value_kind(
     name: str,
-    parameter: ParameterDef,
+    rule: "RuleDecl",
     compile_context: CompileContext,
 ) -> str:
     """Resolve one parameter's lowered numeric kind."""
-    if parameter.temporal:
+    if rule.temporal:
         active_entry = _resolve_temporal_entry(
             name,
-            parameter.temporal,
+            list(rule.temporal),
             compile_context,
             subject="Parameter",
         )
@@ -1959,14 +1955,14 @@ def _resolve_parameter_value_kind(
             )
         return _infer_parameter_value_kind_from_values({0: active_entry.value})
 
-    if parameter.values:
-        return _infer_parameter_value_kind_from_values(parameter.values)
+    if rule.values:
+        return _infer_parameter_value_kind_from_values(rule.values)
 
     override_binding = compile_context.parameter_overrides.get(name)
     if override_binding is not None:
         return _infer_parameter_value_kind_from_values(override_binding.values)
 
-    binding_target = _parameter_binding_target(name, parameter)
+    binding_target = _parameter_binding_target(name, rule)
     raise CompilationError(
         f"Parameter '{name}' is referenced but has no inline numeric values. "
         "Supply a parameter binding such as --parameter "
@@ -2196,7 +2192,7 @@ def _compile_variable(
         parameter_value_kinds=parameter_kind_hints,
         variable_kind_hints=variable_kind_hints,
     )
-    value_kind = _declared_variable_value_kind(variable) or (
+    value_kind = _declared_rule_value_kind(variable) or (
         kind_analysis.return_value_kind or "number"
     )
 
@@ -2465,9 +2461,9 @@ def _bound_parameter_source(source: str, binding: ParameterBinding) -> str:
     return "bound externally"
 
 
-def _parameter_binding_target(name: str, parameter: ParameterDef) -> str:
-    """Return the user-facing binding key for one parsed parameter."""
-    symbol_name = parameter.symbol_name or name
-    if parameter.module_identity:
-        return f"{parameter.module_identity}.{symbol_name}"
+def _parameter_binding_target(name: str, rule: "RuleDecl") -> str:
+    """Return the user-facing binding key for one parsed external rule."""
+    symbol_name = rule.symbol_name or name
+    if rule.module_identity:
+        return f"{rule.module_identity}.{symbol_name}"
     return symbol_name
