@@ -15,7 +15,7 @@ maintaining a separate architecture description.
 
 ```mermaid
 flowchart LR
-    A["Leaf-named .rac modules<br/>source metadata<br/>imports / exports / re-exports"] --> B["Parser<br/>RacFile"]
+    A["Canonical .rac citation-path modules<br/>source metadata<br/>imports / exports / re-exports"] --> B["Parser<br/>RacFile"]
     B --> C["Program loader<br/>RacProgram<br/>module_identity graph"]
     C --> D["Binding + resolution<br/>effective date<br/>parameter overrides<br/>module roots / packages"]
     D --> E["Shared compile model<br/>CompiledModule"]
