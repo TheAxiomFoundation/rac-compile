@@ -22,13 +22,13 @@ from .harness import (
     run_compiler_harness,
 )
 from .js_generator import generate_eitc_calculator
-from .parameter_bindings import (
-    ParameterBindingError,
-    load_parameter_overrides_file,
-    merge_parameter_overrides,
-)
 from .program import load_rac_program
 from .python_generator import generate_eitc_calculator as generate_eitc_calculator_py
+from .rule_bindings import (
+    RuleBindingError,
+    load_rule_bindings_file,
+    merge_rule_bindings,
+)
 
 
 def _parse_effective_date(value: str) -> date:
@@ -41,59 +41,59 @@ def _parse_effective_date(value: str) -> date:
         ) from exc
 
 
-def _parse_parameter_binding_name(name: str) -> str:
-    """Validate a parameter binding target name."""
+def _parse_rule_binding_name(name: str) -> str:
+    """Validate a rule binding target name."""
     if re.fullmatch(r"[A-Za-z_]\w*", name):
         return name
     if "." not in name:
         raise argparse.ArgumentTypeError(
-            f"Invalid parameter binding target '{name}'."
+            f"Invalid rule binding target '{name}'."
         )
 
     module_identity, symbol = name.rsplit(".", 1)
     if not module_identity or not re.fullmatch(r"[A-Za-z_]\w*", symbol):
         raise argparse.ArgumentTypeError(
-            f"Invalid parameter binding target '{name}'."
+            f"Invalid rule binding target '{name}'."
         )
     return name
 
 
-def _parse_parameter_binding(value: str) -> tuple[str, int, float]:
+def _parse_rule_binding(value: str) -> tuple[str, int, float]:
     """Parse NAME=VALUE, module_identity.symbol=VALUE, or indexed variants."""
     try:
         lhs, rhs = value.split("=", 1)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(
-            f"Invalid parameter binding '{value}'. Expected NAME=VALUE."
+            f"Invalid rule binding '{value}'. Expected NAME=VALUE."
         ) from exc
 
     lhs = lhs.strip()
     rhs = rhs.strip()
     if not lhs:
         raise argparse.ArgumentTypeError(
-            f"Invalid parameter binding '{value}'. Missing parameter name."
+            f"Invalid rule binding '{value}'. Missing rule name."
         )
 
     try:
         numeric_value = float(rhs)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(
-            f"Invalid parameter binding '{value}'. VALUE must be numeric."
+            f"Invalid rule binding '{value}'. VALUE must be numeric."
         ) from exc
 
     indexed_match = re.fullmatch(r"(.+)\[(\d+)\]", lhs)
     if indexed_match:
         return (
-            _parse_parameter_binding_name(indexed_match.group(1)),
+            _parse_rule_binding_name(indexed_match.group(1)),
             int(indexed_match.group(2)),
             numeric_value,
         )
 
     try:
-        binding_name = _parse_parameter_binding_name(lhs)
+        binding_name = _parse_rule_binding_name(lhs)
     except argparse.ArgumentTypeError as exc:
         raise argparse.ArgumentTypeError(
-            f"Invalid parameter binding '{value}'. Use NAME=VALUE, "
+            f"Invalid rule binding '{value}'. Use NAME=VALUE, "
             "module_identity.symbol=VALUE, or indexed variants."
         ) from exc
     return binding_name, 0, numeric_value
@@ -121,10 +121,10 @@ def _parse_module_package(value: str) -> tuple[str, Path]:
     return name, Path(directory)
 
 
-def _build_parameter_overrides(
+def _build_rule_bindings(
     bindings: list[tuple[str, int, float]] | None,
 ) -> dict[str, dict[int, float]]:
-    """Aggregate repeated CLI parameter bindings."""
+    """Aggregate repeated CLI rule bindings."""
     overrides: dict[str, dict[int, float]] = {}
     for name, index, value in bindings or []:
         overrides.setdefault(name, {})[index] = value
@@ -167,18 +167,29 @@ def _add_program_compile_arguments(command_parser: argparse.ArgumentParser) -> N
         help="Resolve temporal RAC definitions as of YYYY-MM-DD",
     )
     command_parser.add_argument(
-        "--parameter",
+        "--binding",
         action="append",
-        type=_parse_parameter_binding,
+        type=_parse_rule_binding,
         help=(
-            "Bind an external parameter as NAME=VALUE, module_identity.symbol=VALUE, "
+            "Bind an external rule as NAME=VALUE, module_identity.symbol=VALUE, "
             "or indexed variants"
         ),
     )
     command_parser.add_argument(
+        "--binding-file",
+        type=Path,
+        help="Load external rule bindings from a JSON file",
+    )
+    command_parser.add_argument(
+        "--parameter",
+        action="append",
+        type=_parse_rule_binding,
+        help=argparse.SUPPRESS,
+    )
+    command_parser.add_argument(
         "--parameter-file",
         type=Path,
-        help="Load external parameter bindings from a JSON file",
+        help=argparse.SUPPRESS,
     )
     command_parser.add_argument(
         "--select-output",
@@ -203,18 +214,22 @@ def _add_program_compile_arguments(command_parser: argparse.ArgumentParser) -> N
 
 
 def _load_program_compile_inputs(args) -> tuple[Any, dict[str, Any]]:
-    """Load the RAC program and merged parameter overrides for one CLI request."""
+    """Load the RAC program and merged rule bindings for one CLI request."""
     rac_program = load_rac_program(
         args.input,
         module_roots=[root.expanduser().resolve() for root in args.module_root or []],
         module_packages=_build_module_packages(args.package),
     )
-    file_parameter_overrides = load_parameter_overrides_file(args.parameter_file)
-    parameter_overrides = merge_parameter_overrides(
-        file_parameter_overrides,
-        _build_parameter_overrides(args.parameter),
+    file_rule_bindings = merge_rule_bindings(
+        load_rule_bindings_file(args.binding_file),
+        load_rule_bindings_file(args.parameter_file),
     )
-    return rac_program, parameter_overrides
+    rule_bindings = merge_rule_bindings(
+        file_rule_bindings,
+        _build_rule_bindings(args.binding),
+        _build_rule_bindings(args.parameter),
+    )
+    return rac_program, rule_bindings
 
 
 def main():
@@ -317,18 +332,18 @@ def main():
             sys.exit(1)
 
         try:
-            rac_program, parameter_overrides = _load_program_compile_inputs(args)
+            rac_program, rule_bindings = _load_program_compile_inputs(args)
             if args.command == "lower":
                 code = rac_program.to_lowered_program(
                     effective_date=args.effective_date,
-                    parameter_overrides=parameter_overrides,
+                    rule_bindings=rule_bindings,
                     outputs=args.select_output,
                 ).to_json()
                 lang = "Lowered JSON"
             elif args.rust:
                 gen = rac_program.to_rust_generator(
                     effective_date=args.effective_date,
-                    parameter_overrides=parameter_overrides,
+                    rule_bindings=rule_bindings,
                     outputs=args.select_output,
                 )
                 lang = "Rust"
@@ -336,7 +351,7 @@ def main():
             elif args.python:
                 gen = rac_program.to_python_generator(
                     effective_date=args.effective_date,
-                    parameter_overrides=parameter_overrides,
+                    rule_bindings=rule_bindings,
                     outputs=args.select_output,
                 )
                 lang = "Python"
@@ -344,12 +359,12 @@ def main():
             else:
                 gen = rac_program.to_js_generator(
                     effective_date=args.effective_date,
-                    parameter_overrides=parameter_overrides,
+                    rule_bindings=rule_bindings,
                     outputs=args.select_output,
                 )
                 lang = "JavaScript"
                 code = gen.generate()
-        except (CompilationError, ParameterBindingError) as exc:
+        except (CompilationError, RuleBindingError) as exc:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)
 

@@ -187,6 +187,38 @@ tax:
                 output = mock_print.call_args_list[0][0][0]
                 assert "0.25" in output
 
+    def test_compile_binding_supplies_source_only_external_rule(self, tmp_path):
+        """Compile accepts the rule-oriented --binding flag."""
+        input_file = tmp_path / "test.rac"
+        input_file.write_text(
+            """
+rate:
+  source: "external/rate"
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+"""
+        )
+        with patch(
+            "sys.argv",
+            [
+                "rac-compile",
+                "compile",
+                str(input_file),
+                "--python",
+                "--binding",
+                "rate=0.35",
+            ],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                output = mock_print.call_args_list[0][0][0]
+                assert "0.35" in output
+
     def test_compile_parameter_file_supplies_source_only_parameter(self, tmp_path):
         """Compile can bind source-only parameters from a JSON file."""
         input_file = tmp_path / "test.rac"
@@ -220,6 +252,54 @@ tax:
                 main()
                 output = mock_print.call_args_list[0][0][0]
                 assert "0.4" in output
+
+    def test_compile_binding_file_supports_structured_rule_bundle(self, tmp_path):
+        """Compile accepts the structured --binding-file bundle format."""
+        input_file = tmp_path / "test.rac"
+        binding_file = tmp_path / "bindings.json"
+        input_file.write_text(
+            """
+rate:
+  source: "external/rate"
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+"""
+        )
+        binding_file.write_text(
+            json.dumps(
+                {
+                    "bindings": [
+                        {
+                            "symbol": "rate",
+                            "effective_date": "2025-01-01",
+                            "value": 0.45,
+                        }
+                    ]
+                }
+            )
+        )
+        with patch(
+            "sys.argv",
+            [
+                "rac-compile",
+                "compile",
+                str(input_file),
+                "--python",
+                "--effective-date",
+                "2025-01-01",
+                "--binding-file",
+                str(binding_file),
+            ],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                output = mock_print.call_args_list[0][0][0]
+                assert "0.45" in output
 
     def test_compile_supports_qualified_parameter_binding_for_imported_param(
         self, tmp_path

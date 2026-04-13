@@ -58,7 +58,7 @@ module identities within one loaded program.
 Before code generation, the compiler resolves:
 
 - temporal entries through `--effective-date`
-- source-only parameters through explicit bindings
+- source-only external rules through explicit bindings
 - module-root / package import paths
 - selected public outputs into the reachable subgraph
 
@@ -69,7 +69,7 @@ plug in.
 
 `CompiledModule` is the backend-neutral compile surface produced after graph and
 binding resolution. It knows the reachable computations, dependencies,
-parameter/input requirements, output bindings, and provenance.
+external-rule/input requirements, output bindings, and provenance.
 
 ### 5. Lowered bundle
 
@@ -112,14 +112,14 @@ Current downstream consumers:
 ### Real but still intentionally narrow
 
 - control flow support is limited to the validated subset
-- parameter schemas are still scalar-or-indexed numeric tables
+- external rule schemas are still scalar-or-indexed numeric tables
 - Rust targets the current validated subset, not the full language
 - workspace module/package resolution is local and explicit, not registry-based
 
 ### Still the main unfinished seams
 
-- identity-aware external source resolution beyond ad hoc parameter bundles
-- richer parameter index/domain metadata
+- identity-aware external source resolution beyond ad hoc rule-binding bundles
+- richer external rule index/domain metadata
 - broader statement/runtime coverage in lowering and batch execution
 - stronger public package/workspace metadata
 
@@ -130,7 +130,7 @@ These are the places where product or architecture guidance matters most.
 ### A. External source of truth
 
 Question:
-What artifact or service should supply source-only parameter bindings for a
+What artifact or service should supply source-only external rule bindings for a
 given `(module_identity, symbol, effective_date)`?
 
 Why it matters:

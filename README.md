@@ -16,7 +16,7 @@ pip install rac-compile
 
 - `docs/compiler-architecture.md`: one-page architecture map, stability guide, and decision seams
 - `docs/authoring-rac.md`: how to write `.rac` files, parameters, variables, imports, exports, and temporal definitions
-- `docs/compile-and-lower.md`: CLI and Python API workflows for compile, lower, output selection, and parameter binding
+- `docs/compile-and-lower.md`: CLI and Python API workflows for compile, lower, output selection, and rule binding
 - `docs/validation-and-oracles.md`: harness, validation modes, execution modes, and current oracle lanes
 
 ## Quick start
@@ -74,10 +74,10 @@ rac-compile compile benefit_amount.rac --python --package tax=./packages/tax -o 
 # tax = "./packages/tax"
 
 # Compile only the subgraph needed for one output
-rac-compile compile examples/working_families/benefit_amount.rac --parameter phase_in_rate.rate=0.25 --select-output benefit_amount --python -o benefit_amount.py
+rac-compile compile examples/working_families/benefit_amount.rac --binding phase_in_rate.rate=0.25 --select-output benefit_amount --python -o benefit_amount.py
 
 # Emit the lowered selected-output bundle as JSON
-rac-compile lower examples/working_families/benefit_amount.rac --parameter phase_in_rate.rate=0.25 --select-output benefit_amount -o benefit_amount.lowered.json
+rac-compile lower examples/working_families/benefit_amount.rac --binding phase_in_rate.rate=0.25 --select-output benefit_amount -o benefit_amount.lowered.json
 
 # Run the built-in compiler, batch-execution, and example-oracle scorecard
 rac-compile harness
@@ -92,13 +92,13 @@ rac-compile harness --include-external
 # Resolve temporal unified .rac definitions for a specific date
 rac-compile compile examples/snap.rac --effective-date 2025-01-01 --python -o snap.py
 
-# Bind a source-only parameter reference at compile time
-rac-compile compile examples/working_families/base_amount.rac --parameter phase_in_rate.rate=0.25 --python -o base_amount.py
-# or, for imported source-only parameters, bind by rule identity:
-rac-compile compile examples/working_families/benefit_amount.rac --parameter phase_in_rate.rate=0.25 --python -o benefit_amount.py
+# Bind a source-only external rule at compile time
+rac-compile compile examples/working_families/base_amount.rac --binding phase_in_rate.rate=0.25 --python -o base_amount.py
+# or, for imported source-only rules, bind by rule identity:
+rac-compile compile examples/working_families/benefit_amount.rac --binding phase_in_rate.rate=0.25 --python -o benefit_amount.py
 
-# Load parameter bindings from a JSON file
-rac-compile compile examples/working_families/benefit_amount.rac --parameter-file bindings.json --python -o benefit_amount.py
+# Load rule bindings from a JSON file
+rac-compile compile examples/working_families/benefit_amount.rac --binding-file bindings.json --python -o benefit_amount.py
 
 # Output to stdout
 rac-compile eitc           # JavaScript
@@ -144,7 +144,7 @@ rust_code = program.to_rust_generator(
 ```
 
 For real policy work, keep RAC in `.rac` files with `source:` metadata and cited
-parameter / variable sources. The public docs prefer file-backed examples over
+rule / source metadata. The public docs prefer file-backed examples over
 inline RAC strings for that reason.
 
 ### Generated output
@@ -190,12 +190,12 @@ The generic `rac-compile compile` path now shares one parsed compile model for J
 - Supported: straight-line formulas with assignments plus a final `return`
 - Supported: scalar expressions built from arithmetic, comparisons, boolean operators, ternaries, indexed parameter access, inline RAC conditionals like `if cond: a else: b`, and `abs` / `ceil` / `floor` / `max` / `min` / `round`
 - Supported: limited `if` / `elif` / `else` formula blocks when every reachable path returns a value
-- Supported: parameter references discovered from parsed formulas, with free references exposed as calculator inputs
-- Supported: inline numeric parameter values from `.rac` `values:` blocks and single-entry temporal `.rac` parameters, with exact integer-vs-number kinds preserved in the lowered bundle
-- Supported: multi-entry temporal unified `.rac` parameters and formulas when `--effective-date` is provided
-- Supported: source-only parameters when you bind them explicitly with `--parameter NAME=VALUE`, `--parameter module_identity.symbol=VALUE`, or indexed variants
-- Supported: source-only parameters from a JSON `--parameter-file`, with inline `--parameter` flags overriding file values
-- Supported: explicit scalar-vs-indexed parameter lookup contracts in the lowered bundle, with bare parameter references validated against resolved parameter shape
+- Supported: external numeric rule references discovered from parsed formulas, with free references exposed as calculator inputs
+- Supported: inline numeric external rule values from `.rac` `values:` blocks and single-entry temporal `.rac` source rules, with exact integer-vs-number kinds preserved in the lowered bundle
+- Supported: multi-entry temporal unified `.rac` external values and formulas when `--effective-date` is provided
+- Supported: source-only external rules when you bind them explicitly with `--binding NAME=VALUE`, `--binding module_identity.symbol=VALUE`, or indexed variants
+- Supported: source-only external rules from a JSON `--binding-file`, with inline `--binding` flags overriding file values
+- Supported: explicit scalar-vs-indexed external lookup contracts in the lowered bundle, with bare rule references validated against resolved value shape
 - Supported: output-focused compilation via repeated `--select-output NAME`, pruning to the reachable variable subgraph for those outputs
 - Supported: lowered bundle emission via `rac-compile lower`, producing a serializable post-resolution artifact with explicit inputs, typed parameters, typed ordered computations, and typed public outputs
 - Supported: Rust output via `rac-compile compile ... --rust`, using the same lowered bundle as JS/Python for the validated numeric/boolean subset
@@ -216,8 +216,8 @@ The generic `rac-compile compile` path now shares one parsed compile model for J
 - Unsupported: string formula literals in Rust output, and the prebuilt `rac-compile eitc` shortcut still only emits JavaScript or Python
 
 If a file has multiple temporal entries and you do not supply an effective date, the compiler errors instead of guessing.
-If a referenced parameter has no inline numeric values and you do not bind it explicitly, the compiler errors instead of inventing a placeholder.
-If a bare parameter reference resolves to multiple indexed values, the compiler errors instead of silently taking index `0`.
+If a referenced external rule has no inline numeric values and you do not bind it explicitly, the compiler errors instead of inventing a placeholder.
+If a bare external rule reference resolves to multiple indexed values, the compiler errors instead of silently taking index `0`.
 If a control-flow formula does not return a value on every reachable path, the compiler errors instead of emitting `None` / `undefined`.
 If plain imports expose the same symbol name more than once, the compiler errors instead of guessing which one you meant.
 If a selective import asks for a name a module does not export, the compiler errors instead of treating it as an input.
@@ -226,18 +226,18 @@ If a re-export asks for a name a dependency does not export, the compiler errors
 If a bare import has no configured module root, or resolves to more than one file across roots, the compiler errors instead of guessing.
 If a package-prefixed import names an unknown package alias, or a configured package alias points at no file, the compiler errors instead of falling back to a different root.
 If a loaded program contains two different `.rac` files with the same canonical rule identity, the compiler errors instead of inventing an ambiguous identity.
-If a bare parameter binding name matches more than one imported source-only parameter, the compiler errors instead of guessing; bind it as `module_identity.symbol`.
+If a bare rule binding name matches more than one imported source-only rule, the compiler errors instead of guessing; bind it as `module_identity.symbol`.
 
 Unsupported constructs fail with an explicit compiler error instead of generating misleading output.
 
 ### Lowered Bundle
 
 `rac-compile lower` emits the compiler's backend-neutral bundle after import resolution,
-temporal resolution, parameter binding, and selected-output pruning. The JSON payload
+temporal resolution, external rule binding, and selected-output pruning. The JSON payload
 includes:
 
 - explicit public inputs
-- resolved parameter values and sources, each with an explicit `value_kind` plus `lookup_kind` metadata, `index_value_kind` for indexed tables, and the originating file's `module_identity`
+- resolved external rule values and sources, each with an explicit `value_kind` plus `lookup_kind` metadata, `index_value_kind` for indexed tables, and the originating file's `module_identity`
 - topologically ordered computations expressed in validated statement/expression IR, each with an explicit `value_kind`, typed local slot metadata, and `module_identity`
 - public outputs mapped to the internal computation names they expose, each with an explicit `value_kind` and `module_identity`
 
@@ -245,9 +245,9 @@ JS, Python, and Rust generation now consume that same lowered bundle internally,
 so the artifact is the exact seam between graph compilation and target-specific
 rendering.
 
-### Parameter Bundle Format
+### Rule Binding Bundle Format
 
-`--parameter-file` accepts either a simple compatibility map:
+`--binding-file` accepts either a simple compatibility map:
 
 ```json
 {
@@ -257,21 +257,27 @@ rendering.
 }
 ```
 
-Or a structured bundle with schema/versioning and parameter metadata:
+Or a structured bundle with schema/versioning, rule identity, and optional
+effective dates:
 
 ```json
 {
   "schema_version": 1,
   "metadata": {
-    "name": "TY2025 external parameters"
+    "name": "TY2025 external rule bindings"
   },
-  "parameters": {
-    "rate": {
+  "bindings": [
+    {
+      "module_identity": "phase_in_rate",
+      "symbol": "rate",
+      "effective_date": "2025-01-01",
       "value": 0.25,
       "source": "bundle://ty2025",
       "unit": "rate"
     },
-    "thresholds": {
+    {
+      "module_identity": "thresholds",
+      "symbol": "phase_in_cap",
       "values": {
         "0": 10000,
         "1": 20000,
@@ -279,14 +285,14 @@ Or a structured bundle with schema/versioning and parameter metadata:
       },
       "source": "bundle://ty2025"
     }
-  }
+  ]
 }
 ```
 
-If a JSON file is ambiguous between the structured bundle form and a plain
-parameter map, `rac-compile` now errors instead of guessing. In practice, that
-means schema-versioned bundles with unusual numeric parameter names should also
-include a dict-valued `metadata` object to make the intent explicit.
+The compatibility-map form still works, and the older `parameters`-enveloped
+JSON shape is still accepted as an adapter. The explicit `bindings` form is the
+real contract because it carries rule identity, metadata, and optional
+effective dates.
 
 ### Compiler Harness
 

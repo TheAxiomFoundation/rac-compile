@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 
 from src.rac_compile.compile_model import CompilationError
-from src.rac_compile.parameter_bindings import ParameterBindingError
 from src.rac_compile.program import load_rac_program
+from src.rac_compile.rule_bindings import RuleBindingError
 
 
 class TestRacProgram:
@@ -817,8 +817,8 @@ tax:
         )
 
         with pytest.raises(
-            ParameterBindingError,
-            match="Parameter binding target 'rate' is ambiguous",
+            RuleBindingError,
+            match="Rule binding target 'rate' is ambiguous",
         ):
             load_rac_program(entry).to_compile_model(parameter_overrides={"rate": 0.25})
 

@@ -43,7 +43,7 @@ The shipped file-graph example lives in:
 - `/Users/maxghenis/TheAxiomFoundation/rac-compile/examples/working_families/phase_in_cap.rac`
 
 That example exercises import aliases, selective imports, re-exports, exported
-output aliases, and qualified parameter binding.
+output aliases, and qualified external rule binding.
 
 There is a short companion note with runnable commands in:
 
@@ -66,7 +66,7 @@ rac-compile compile benefit_amount.rac --python --package tax=./packages/tax -o 
 Use `--select-output` to prune the graph to the reachable subgraph for one output:
 
 ```bash
-rac-compile compile examples/working_families/benefit_amount.rac --parameter phase_in_rate.rate=0.25 --select-output benefit_amount --python -o benefit_amount.py
+rac-compile compile examples/working_families/benefit_amount.rac --binding phase_in_rate.rate=0.25 --select-output benefit_amount --python -o benefit_amount.py
 ```
 
 This works against the public output surface, including exported aliases.
@@ -81,34 +81,34 @@ rac-compile compile policy.rac --effective-date 2025-01-01 --python -o policy.py
 
 Without an effective date, the compiler errors instead of guessing.
 
-## Bind external parameters
+## Bind external rules
 
 One-off bindings:
 
 ```bash
-rac-compile compile examples/working_families/base_amount.rac --parameter phase_in_rate.rate=0.25 --python -o base_amount.py
-rac-compile compile examples/working_families/benefit_amount.rac --parameter phase_in_rate.rate=0.25 --select-output benefit_amount --python -o benefit_amount.py
+rac-compile compile examples/working_families/base_amount.rac --binding phase_in_rate.rate=0.25 --python -o base_amount.py
+rac-compile compile examples/working_families/benefit_amount.rac --binding phase_in_rate.rate=0.25 --select-output benefit_amount --python -o benefit_amount.py
 ```
 
-Use `module_identity.symbol` when the bound parameter lives in an imported file.
+Use `module_identity.symbol` when the bound rule lives in an imported file.
 Bare names still work when they are unambiguous across the loaded graph.
 
-JSON parameter file:
+JSON rule binding file:
 
 ```bash
-rac-compile compile examples/working_families/benefit_amount.rac --parameter-file bindings.json --python -o benefit_amount.py
+rac-compile compile examples/working_families/benefit_amount.rac --binding-file bindings.json --python -o benefit_amount.py
 ```
 
-Inline `--parameter` flags override file values.
+Inline `--binding` flags override file values.
 
 ## Emit the lowered bundle
 
-Lowering stops after graph resolution, temporal resolution, parameter binding, and
+Lowering stops after graph resolution, temporal resolution, external rule binding, and
 selected-output pruning:
 
 ```bash
 rac-compile lower examples/snap.rac -o snap.lowered.json
-rac-compile lower examples/working_families/benefit_amount.rac --parameter phase_in_rate.rate=0.25 --select-output benefit_amount -o benefit_amount.lowered.json
+rac-compile lower examples/working_families/benefit_amount.rac --binding phase_in_rate.rate=0.25 --select-output benefit_amount -o benefit_amount.lowered.json
 ```
 
 The lowered JSON includes:

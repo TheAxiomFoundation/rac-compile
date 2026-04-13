@@ -41,6 +41,7 @@ class RacProgram:
     def to_compile_model(
         self,
         effective_date=None,
+        rule_bindings: dict[str, Any] | None = None,
         parameter_overrides: dict[str, Any] | None = None,
         outputs: list[str] | None = None,
     ):
@@ -53,6 +54,7 @@ class RacProgram:
         )
         return merged.to_compile_model(
             effective_date=effective_date,
+            rule_bindings=rule_bindings,
             parameter_overrides=parameter_overrides,
             outputs=selected_outputs,
         ).with_public_outputs(public_output_bindings)
@@ -60,12 +62,14 @@ class RacProgram:
     def to_js_generator(
         self,
         effective_date=None,
+        rule_bindings: dict[str, Any] | None = None,
         parameter_overrides: dict[str, Any] | None = None,
         outputs: list[str] | None = None,
     ):
         """Build a JS generator for the merged program graph."""
         return self.to_compile_model(
             effective_date=effective_date,
+            rule_bindings=rule_bindings,
             parameter_overrides=parameter_overrides,
             outputs=outputs,
         ).to_js_generator()
@@ -73,12 +77,14 @@ class RacProgram:
     def to_lowered_program(
         self,
         effective_date=None,
+        rule_bindings: dict[str, Any] | None = None,
         parameter_overrides: dict[str, Any] | None = None,
         outputs: list[str] | None = None,
     ):
         """Build a lowered program bundle for the merged graph."""
         return self.to_compile_model(
             effective_date=effective_date,
+            rule_bindings=rule_bindings,
             parameter_overrides=parameter_overrides,
             outputs=outputs,
         ).to_lowered_program()
@@ -86,12 +92,14 @@ class RacProgram:
     def to_python_generator(
         self,
         effective_date=None,
+        rule_bindings: dict[str, Any] | None = None,
         parameter_overrides: dict[str, Any] | None = None,
         outputs: list[str] | None = None,
     ):
         """Build a Python generator for the merged program graph."""
         return self.to_compile_model(
             effective_date=effective_date,
+            rule_bindings=rule_bindings,
             parameter_overrides=parameter_overrides,
             outputs=outputs,
         ).to_python_generator()
@@ -99,12 +107,14 @@ class RacProgram:
     def to_rust_generator(
         self,
         effective_date=None,
+        rule_bindings: dict[str, Any] | None = None,
         parameter_overrides: dict[str, Any] | None = None,
         outputs: list[str] | None = None,
     ):
         """Build a Rust generator for the merged program graph."""
         return self.to_compile_model(
             effective_date=effective_date,
+            rule_bindings=rule_bindings,
             parameter_overrides=parameter_overrides,
             outputs=outputs,
         ).to_rust_generator()

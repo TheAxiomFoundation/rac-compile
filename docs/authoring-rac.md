@@ -85,7 +85,7 @@ rate:
 ```
 
 Source-only external rules must be bound explicitly at compile time with
-`--parameter` or `--parameter-file`. For imported source-only parameters, use
+`--binding` or `--binding-file`. For imported source-only rules, use
 `module_identity.symbol`.
 
 ## Computed Rules

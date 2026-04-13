@@ -65,6 +65,14 @@ from .python_generator import Parameter as PythonParameter
 from .python_generator import PythonCodeGenerator
 from .python_generator import Variable as PythonVariable
 from .python_generator import generate_eitc_calculator as generate_eitc_calculator_py
+from .rule_bindings import (
+    RuleBinding,
+    RuleBindingBundle,
+    RuleBindingEntry,
+    RuleBindingError,
+    RuleBindingTarget,
+    RuleResolver,
+)
 from .rust_generator import RustCodeGenerator
 
 __version__ = "0.2.0"
@@ -84,6 +92,12 @@ __all__ = [
     "ParameterBinding",
     "ParameterBindingError",
     "ParameterBundle",
+    "RuleBinding",
+    "RuleBindingBundle",
+    "RuleBindingEntry",
+    "RuleBindingError",
+    "RuleBindingTarget",
+    "RuleResolver",
     "RacProgram",
     "CompiledInput",
     "CompiledModule",

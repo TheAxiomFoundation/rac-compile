@@ -35,8 +35,8 @@ from .expression_ir import (
     render_statement_block_python,
 )
 from .js_generator import JSCodeGenerator
-from .parameter_bindings import ParameterBinding
 from .python_generator import PythonCodeGenerator
+from .rule_bindings import RuleBinding, RuleBindingError, RuleResolver
 from .rust_generator import RustCodeGenerator
 
 if TYPE_CHECKING:
@@ -52,7 +52,7 @@ class CompileContext:
     """Context used to resolve compilation decisions."""
 
     effective_date: date | None = None
-    parameter_overrides: dict[str, ParameterBinding] = field(default_factory=dict)
+    external_rule_resolver: RuleResolver = field(default_factory=RuleResolver)
 
 
 _BOOLEAN_PREFIXES = ("can_", "has_", "is_", "should_")
@@ -1172,7 +1172,7 @@ def _build_parameter_kind_hints(
                 rule,
                 compile_context,
             )
-        except CompilationError:
+        except (CompilationError, RuleBindingError):
             # Parameter resolution still happens later for referenced parameters.
             # Keep unused or unreachable source-only parameters from failing eager
             # kind collection, and fall back conservatively until the concrete
@@ -1981,25 +1981,25 @@ def _compile_parameter(
             index_value_kind=_index_value_kind_for_lookup(lookup_kind),
         )
 
-    override_binding = compile_context.parameter_overrides.get(name)
-    if override_binding is not None:
-        _validate_parameter_lookup_contract(name, override_binding.values, lookup_kind)
+    resolved_binding = _resolve_external_rule_binding(rule, compile_context)
+    if resolved_binding is not None:
+        _validate_parameter_lookup_contract(name, resolved_binding.values, lookup_kind)
         return CompiledParameter(
             name=name,
-            values=override_binding.values,
-            source=_bound_parameter_source(rule.source, override_binding),
+            values=resolved_binding.values,
+            source=_bound_external_rule_source(rule.source, resolved_binding),
             module_identity=rule.module_identity,
             value_kind=value_kind,
             lookup_kind=lookup_kind,
             index_value_kind=_index_value_kind_for_lookup(lookup_kind),
         )
 
-    binding_target = _parameter_binding_target(name, rule)
+    binding_target = _external_rule_binding_target(name, rule)
     raise CompilationError(
-        f"Parameter '{name}' is referenced but has no inline numeric values. "
-        "Supply a parameter binding such as --parameter "
-        f"{binding_target}=VALUE, --parameter-file bindings.json, or pass "
-        f"parameter_overrides={{'{binding_target}': VALUE}}."
+        f"External rule '{name}' is referenced but has no inline numeric values. "
+        "Supply a rule binding such as --binding "
+        f"{binding_target}=VALUE, --binding-file bindings.json, or pass "
+        f"rule_bindings={{'{binding_target}': VALUE}}."
     )
 
 
@@ -2030,16 +2030,16 @@ def _resolve_parameter_value_kind(
     if rule.values:
         return _infer_parameter_value_kind_from_values(rule.values)
 
-    override_binding = compile_context.parameter_overrides.get(name)
-    if override_binding is not None:
-        return _infer_parameter_value_kind_from_values(override_binding.values)
+    resolved_binding = _resolve_external_rule_binding(rule, compile_context)
+    if resolved_binding is not None:
+        return _infer_parameter_value_kind_from_values(resolved_binding.values)
 
-    binding_target = _parameter_binding_target(name, rule)
+    binding_target = _external_rule_binding_target(name, rule)
     raise CompilationError(
-        f"Parameter '{name}' is referenced but has no inline numeric values. "
-        "Supply a parameter binding such as --parameter "
-        f"{binding_target}=VALUE, --parameter-file bindings.json, or pass "
-        f"parameter_overrides={{'{binding_target}': VALUE}}."
+        f"External rule '{name}' is referenced but has no inline numeric values. "
+        "Supply a rule binding such as --binding "
+        f"{binding_target}=VALUE, --binding-file bindings.json, or pass "
+        f"rule_bindings={{'{binding_target}': VALUE}}."
     )
 
 
@@ -2541,8 +2541,20 @@ def _ordered_unique(values: Any) -> list[str]:
     return ordered
 
 
-def _bound_parameter_source(source: str, binding: ParameterBinding) -> str:
-    """Annotate a source-only parameter that was bound externally."""
+def _resolve_external_rule_binding(
+    rule: "RuleDecl",
+    compile_context: CompileContext,
+) -> RuleBinding | None:
+    """Resolve one external rule from the compile context resolver."""
+    return compile_context.external_rule_resolver.resolve(
+        module_identity=rule.module_identity,
+        symbol=rule.symbol_name or rule.name,
+        effective_date=compile_context.effective_date,
+    )
+
+
+def _bound_external_rule_source(source: str, binding: RuleBinding) -> str:
+    """Annotate a source-backed external rule that was bound externally."""
     if binding.source and source:
         return f"{source} [bound from {binding.source}]"
     if binding.source:
@@ -2552,7 +2564,7 @@ def _bound_parameter_source(source: str, binding: ParameterBinding) -> str:
     return "bound externally"
 
 
-def _parameter_binding_target(name: str, rule: "RuleDecl") -> str:
+def _external_rule_binding_target(name: str, rule: "RuleDecl") -> str:
     """Return the user-facing binding key for one parsed external rule."""
     symbol_name = rule.symbol_name or name
     if rule.module_identity:

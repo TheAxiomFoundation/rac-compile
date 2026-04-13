@@ -9,11 +9,11 @@ It demonstrates:
 - import aliases
 - re-exports
 - exported output aliases
-- qualified source-only parameter binding via `module_identity.symbol`
+- qualified source-only external rule binding via `module_identity.symbol`
 
 ## Files
 
-- `phase_in_rate.rac`: source-only parameter exported as `rate`
+- `phase_in_rate.rac`: source-only external rule exported as `rate`
 - `phase_in_cap.rac`: inline scalar parameter exported as `cap`
 - `base_amount.rac`: imported helper variable exported as `base_amount`
 - `benefit_amount.rac`: entry file that re-exports `base_amount` and publishes
@@ -24,7 +24,7 @@ It demonstrates:
 ```bash
 rac-compile compile examples/working_families/benefit_amount.rac \
   --python \
-  --parameter phase_in_rate.rate=0.25 \
+  --binding phase_in_rate.rate=0.25 \
   --select-output benefit_amount \
   -o benefit_amount.py
 ```
@@ -33,7 +33,7 @@ rac-compile compile examples/working_families/benefit_amount.rac \
 
 ```bash
 rac-compile lower examples/working_families/benefit_amount.rac \
-  --parameter phase_in_rate.rate=0.25 \
+  --binding phase_in_rate.rate=0.25 \
   --select-output benefit_amount \
   -o benefit_amount.lowered.json
 ```

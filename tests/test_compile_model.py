@@ -1,12 +1,14 @@
 """Tests for the shared generic compile model."""
 
 import json
+from datetime import date
 
 import pytest
 
 from src.rac_compile.compile_model import CompilationError, LoweredProgram
 from src.rac_compile.parser import parse_rac
 from src.rac_compile.program import load_rac_program
+from src.rac_compile.rule_bindings import RuleBindingError
 
 
 class TestCompiledModule:
@@ -695,7 +697,7 @@ tax:
   from 2024-01-01:
     return wages * rate
 """
-        with pytest.raises(CompilationError, match="Supply a parameter binding"):
+        with pytest.raises(CompilationError, match="Supply a rule binding"):
             parse_rac(rac).to_compile_model()
 
     def test_unused_source_only_parameter_does_not_fail_compile(self):
@@ -760,6 +762,73 @@ tax:
         exec(code, namespace)
 
         assert namespace["calculate"](wages=100)["tax"] == 25
+
+    def test_source_only_parameter_accepts_effective_dated_rule_bindings(self):
+        """Structured rule bindings resolve by compile effective date."""
+        rac = """
+rate:
+  source: "external/rate"
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+"""
+        namespace = {}
+        code = parse_rac(rac).to_python_generator(
+            effective_date=date(2025, 1, 1),
+            rule_bindings={
+                "bindings": [
+                    {
+                        "symbol": "rate",
+                        "effective_date": "2024-01-01",
+                        "value": 0.2,
+                    },
+                    {
+                        "symbol": "rate",
+                        "effective_date": "2025-01-01",
+                        "value": 0.3,
+                    },
+                ]
+            },
+        ).generate()
+
+        exec(code, namespace)
+
+        assert namespace["calculate"](wages=100)["tax"] == 30
+
+    def test_source_only_parameter_rejects_dated_rule_bindings_without_effective_date(
+        self,
+    ):
+        """Date-specific rule bindings require an explicit compile date."""
+        rac = """
+rate:
+  source: "external/rate"
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate
+"""
+        with pytest.raises(
+            RuleBindingError,
+            match="has only effective-dated bindings",
+        ):
+            parse_rac(rac).to_compile_model(
+                rule_bindings={
+                    "bindings": [
+                        {
+                            "symbol": "rate",
+                            "effective_date": "2025-01-01",
+                            "value": 0.3,
+                        }
+                    ]
+                }
+            )
 
     def test_scalar_parameter_reference_rejects_indexed_values(self):
         """Bare parameter references fail when the resolved parameter is indexed."""

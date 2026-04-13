@@ -7,11 +7,15 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Optional
 
-from .parameter_bindings import (
-    ParameterBinding,
-    ParameterBindingError,
-    ParameterBundle,
-    normalize_parameter_overrides,
+from .rule_bindings import (
+    RuleBinding,
+    RuleBindingBundle,
+    RuleBindingEntry,
+    RuleBindingError,
+    RuleBindingTarget,
+    RuleResolver,
+    merge_rule_bindings,
+    normalize_rule_bindings,
 )
 
 
@@ -300,60 +304,73 @@ class RacFile:
             (internal_name, internal_name) for internal_name in requested_internal
         ]
 
-    def resolve_parameter_overrides(
+    def resolve_rule_bindings(
         self,
-        parameter_overrides: dict[str, Any] | ParameterBundle | None = None,
-    ) -> dict[str, ParameterBinding]:
-        """Resolve external bindings against internal parameter names safely."""
-        normalized = normalize_parameter_overrides(parameter_overrides)
-        if not normalized:
-            return {}
+        rule_bindings: dict[str, Any] | RuleBindingBundle | RuleResolver | None = None,
+    ) -> RuleResolver:
+        """Resolve external rule bindings against this file graph safely."""
+        bundle = normalize_rule_bindings(rule_bindings)
+        if not bundle.bindings:
+            return RuleResolver()
 
         external_rules = {rule.name: rule for rule in self.external_rules}
         exact_names = set(external_rules)
         qualified_targets: dict[str, str] = {}
         bare_targets: dict[str, list[str]] = {}
-        available_targets: dict[str, tuple[str, str]] = {}
+        available_targets: dict[str, RuleBindingTarget] = {}
         for internal_name, rule in external_rules.items():
             symbol_name = rule.symbol_name or internal_name
             bare_targets.setdefault(symbol_name, []).append(internal_name)
-            available_targets[internal_name] = (
-                rule.module_identity,
-                symbol_name,
+            available_targets[internal_name] = RuleBindingTarget(
+                module_identity=rule.module_identity,
+                symbol=symbol_name,
             )
             if rule.module_identity:
-                qualified_targets[
-                    f"{rule.module_identity}.{symbol_name}"
-                ] = internal_name
+                qualified_targets[available_targets[internal_name].display_name] = (
+                    internal_name
+                )
 
-        resolved: dict[str, ParameterBinding] = {}
-        for requested_name, binding in normalized.items():
-            internal_name = _resolve_parameter_binding_name(
-                requested_name,
+        resolved_entries: list[RuleBindingEntry] = []
+        for entry in bundle.bindings:
+            internal_name = _resolve_rule_binding_name(
+                entry.target,
                 exact_names=exact_names,
                 qualified_targets=qualified_targets,
                 bare_targets=bare_targets,
                 available_targets=available_targets,
             )
-            existing = resolved.get(internal_name)
-            if existing is None:
-                resolved[internal_name] = binding
-            else:
-                values = dict(existing.values)
-                values.update(binding.values)
-                resolved[internal_name] = ParameterBinding(
-                    values=values,
-                    source=binding.source or existing.source,
-                    description=binding.description or existing.description,
-                    unit=binding.unit or existing.unit,
-                    reference=binding.reference or existing.reference,
+            resolved_entries.append(
+                RuleBindingEntry(
+                    target=available_targets[internal_name],
+                    binding=entry.binding,
+                    effective_date=entry.effective_date,
                 )
-        return resolved
+            )
+        return merge_rule_bindings(
+            RuleBindingBundle(bindings=tuple(resolved_entries))
+        ).to_resolver()
+
+    def resolve_parameter_overrides(
+        self,
+        parameter_overrides: (
+            dict[str, Any] | RuleBindingBundle | RuleResolver | None
+        ) = None,
+    ) -> dict[str, RuleBinding]:
+        """Compatibility wrapper returning undated rule bindings by display name."""
+        resolver = self.resolve_rule_bindings(parameter_overrides)
+        return {
+            entry.target.display_name: entry.binding
+            for entry in resolver.bindings
+            if entry.effective_date is None
+        }
 
     def to_compile_model(
         self,
         effective_date: date | str | None = None,
-        parameter_overrides: dict[str, Any] | ParameterBundle | None = None,
+        rule_bindings: dict[str, Any] | RuleBindingBundle | RuleResolver | None = None,
+        parameter_overrides: (
+            dict[str, Any] | RuleBindingBundle | RuleResolver | None
+        ) = None,
         outputs: list[str] | None = None,
     ):
         """Convert to the shared compile model for generic compilation."""
@@ -368,17 +385,19 @@ class RacFile:
                 )
             return load_rac_program(self.origin).to_compile_model(
                 effective_date=effective_date,
+                rule_bindings=rule_bindings,
                 parameter_overrides=parameter_overrides,
                 outputs=outputs,
             )
 
         selected_outputs, public_output_bindings = self.resolve_output_bindings(outputs)
+        merged_rule_bindings = merge_rule_bindings(rule_bindings, parameter_overrides)
         return CompiledModule.from_rac_file(
             self,
             compile_context=CompileContext(
                 effective_date=_normalize_effective_date(effective_date),
-                parameter_overrides=self.resolve_parameter_overrides(
-                    parameter_overrides
+                external_rule_resolver=self.resolve_rule_bindings(
+                    merged_rule_bindings
                 ),
             ),
             selected_outputs=selected_outputs,
@@ -387,12 +406,16 @@ class RacFile:
     def to_lowered_program(
         self,
         effective_date: date | str | None = None,
-        parameter_overrides: dict[str, Any] | ParameterBundle | None = None,
+        rule_bindings: dict[str, Any] | RuleBindingBundle | RuleResolver | None = None,
+        parameter_overrides: (
+            dict[str, Any] | RuleBindingBundle | RuleResolver | None
+        ) = None,
         outputs: list[str] | None = None,
     ):
         """Convert to a serializable lowered program bundle."""
         return self.to_compile_model(
             effective_date=effective_date,
+            rule_bindings=rule_bindings,
             parameter_overrides=parameter_overrides,
             outputs=outputs,
         ).to_lowered_program()
@@ -400,12 +423,16 @@ class RacFile:
     def to_js_generator(
         self,
         effective_date: date | str | None = None,
-        parameter_overrides: dict[str, Any] | ParameterBundle | None = None,
+        rule_bindings: dict[str, Any] | RuleBindingBundle | RuleResolver | None = None,
+        parameter_overrides: (
+            dict[str, Any] | RuleBindingBundle | RuleResolver | None
+        ) = None,
         outputs: list[str] | None = None,
     ):
         """Convert to JSCodeGenerator for JS output."""
         return self.to_compile_model(
             effective_date=effective_date,
+            rule_bindings=rule_bindings,
             parameter_overrides=parameter_overrides,
             outputs=outputs,
         ).to_js_generator()
@@ -413,12 +440,16 @@ class RacFile:
     def to_python_generator(
         self,
         effective_date: date | str | None = None,
-        parameter_overrides: dict[str, Any] | ParameterBundle | None = None,
+        rule_bindings: dict[str, Any] | RuleBindingBundle | RuleResolver | None = None,
+        parameter_overrides: (
+            dict[str, Any] | RuleBindingBundle | RuleResolver | None
+        ) = None,
         outputs: list[str] | None = None,
     ):
         """Convert to PythonCodeGenerator for Python output."""
         return self.to_compile_model(
             effective_date=effective_date,
+            rule_bindings=rule_bindings,
             parameter_overrides=parameter_overrides,
             outputs=outputs,
         ).to_python_generator()
@@ -426,12 +457,16 @@ class RacFile:
     def to_rust_generator(
         self,
         effective_date: date | str | None = None,
-        parameter_overrides: dict[str, Any] | ParameterBundle | None = None,
+        rule_bindings: dict[str, Any] | RuleBindingBundle | RuleResolver | None = None,
+        parameter_overrides: (
+            dict[str, Any] | RuleBindingBundle | RuleResolver | None
+        ) = None,
         outputs: list[str] | None = None,
     ):
         """Convert to RustCodeGenerator for Rust output."""
         return self.to_compile_model(
             effective_date=effective_date,
+            rule_bindings=rule_bindings,
             parameter_overrides=parameter_overrides,
             outputs=outputs,
         ).to_rust_generator()
@@ -614,42 +649,43 @@ def _derive_module_identity(origin: Path | None) -> str:
     return resolved.stem
 
 
-def _resolve_parameter_binding_name(
-    requested_name: str,
+def _resolve_rule_binding_name(
+    target: RuleBindingTarget,
     *,
     exact_names: set[str],
     qualified_targets: dict[str, str],
     bare_targets: dict[str, list[str]],
-    available_targets: dict[str, tuple[str, str]],
+    available_targets: dict[str, RuleBindingTarget],
 ) -> str:
     """Resolve a user-facing parameter binding target to one internal name."""
-    if requested_name in exact_names:
-        return requested_name
-    if requested_name in qualified_targets:
+    requested_name = target.display_name
+    if not target.module_identity and target.symbol in exact_names:
+        return target.symbol
+    if target.module_identity and requested_name in qualified_targets:
         return qualified_targets[requested_name]
 
-    candidates = bare_targets.get(requested_name, [])
+    candidates = bare_targets.get(target.symbol, [])
     if len(candidates) == 1:
         return candidates[0]
     if len(candidates) > 1:
         qualified = ", ".join(
             sorted(
-                f"{available_targets[name][0]}.{available_targets[name][1]}"
+                available_targets[name].display_name
                 for name in candidates
             )
         )
-        raise ParameterBindingError(
-            f"Parameter binding target '{requested_name}' is ambiguous across "
+        raise RuleBindingError(
+            f"Rule binding target '{requested_name}' is ambiguous across "
             f"multiple modules: {qualified}. Use module_identity.symbol."
         )
 
     available_names = set(exact_names) | set(qualified_targets)
     available_names.update(
-        name for name, matched in bare_targets.items() if len(matched) == 1
+        symbol for symbol, matched in bare_targets.items() if len(matched) == 1
     )
     available = ", ".join(sorted(available_names)) or "none"
-    raise ParameterBindingError(
-        f"Unknown parameter binding target '{requested_name}'. Available targets: "
+    raise RuleBindingError(
+        f"Unknown rule binding target '{requested_name}'. Available targets: "
         f"{available}."
     )
 
