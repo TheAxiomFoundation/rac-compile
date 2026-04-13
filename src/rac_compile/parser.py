@@ -332,13 +332,20 @@ class RacFile:
 
         resolved_entries: list[RuleBindingEntry] = []
         for entry in bundle.bindings:
-            internal_name = _resolve_rule_binding_name(
-                entry.target,
-                exact_names=exact_names,
-                qualified_targets=qualified_targets,
-                bare_targets=bare_targets,
-                available_targets=available_targets,
-            )
+            try:
+                internal_name = _resolve_rule_binding_name(
+                    entry.target,
+                    exact_names=exact_names,
+                    qualified_targets=qualified_targets,
+                    bare_targets=bare_targets,
+                    available_targets=available_targets,
+                )
+            except RuleBindingError as exc:
+                if bundle.allow_unused_entries and str(exc).startswith(
+                    "Unknown rule binding target"
+                ):
+                    continue
+                raise
             resolved_entries.append(
                 RuleBindingEntry(
                     target=available_targets[internal_name],

@@ -23,6 +23,7 @@ from .compile_model import CompilationError
 from .parameter_bindings import ParameterBindingError
 from .parser import parse_rac
 from .program import load_rac_program
+from .rule_bindings import load_rule_bindings_file, merge_rule_bindings
 from .validation import ComparisonConfig, run_policyengine_household
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -41,6 +42,8 @@ class HarnessCase:
     entrypoint: str = "main.rac"
     repo_entrypoint: str | None = None
     workspace_entrypoint: str | None = None
+    repo_binding_files: tuple[str, ...] = ()
+    workspace_binding_files: tuple[str, ...] = ()
     targets: tuple[str, ...] = ("js", "python", "rust")
     effective_date: str | None = None
     parameter_overrides: dict[str, Any] | None = None
@@ -570,6 +573,25 @@ tax:
         external=True,
     ),
     HarnessCase(
+        name="live_rac_us_override_yaml_binding_support",
+        category="live_stack",
+        description=(
+            "Real rac-us override YAML artifacts should bind source-backed rules "
+            "through citation-path identities."
+        ),
+        workspace_entrypoint="rac-compile/examples/statute/26/32/b/2/A/base_amounts.rac",
+        workspace_binding_files=("rac-us/irs/rev-proc-2023-34/eitc-2024.yaml",),
+        effective_date="2024-06-01",
+        outputs=["eitc_pair_total"],
+        inputs={"number_of_qualifying_children": 1},
+        expected_input_names=["number_of_qualifying_children"],
+        expected_output_module_identities={
+            "eitc_pair_total": "statute/26/32/b/2/A/base_amounts"
+        },
+        expected_outputs={"eitc_pair_total": 35110},
+        live=True,
+    ),
+    HarnessCase(
         name="live_rac_us_input_variable_support",
         category="live_stack",
         description=(
@@ -894,6 +916,7 @@ def _run_case(case: HarnessCase) -> HarnessResult:
         lowered_program = program.to_lowered_program(
             effective_date=case.effective_date,
             parameter_overrides=case.parameter_overrides,
+            rule_bindings=_load_case_rule_bindings(case),
             outputs=case.outputs,
         )
         lowered_detail = _check_lowered_program(
@@ -1129,6 +1152,23 @@ def _load_case_program(case: HarnessCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content.strip() + "\n")
         return load_rac_program(root / case.entrypoint)
+
+
+def _load_case_rule_bindings(case: HarnessCase) -> Any:
+    """Load any binding files associated with one harness case."""
+    bundles = []
+    for relative_path in case.repo_binding_files:
+        bundles.append(load_rule_bindings_file(_REPO_ROOT / relative_path))
+    for relative_path in case.workspace_binding_files:
+        path = _WORKSPACE_ROOT / relative_path
+        if not path.exists():
+            raise ImportError(
+                f"Workspace harness case '{case.name}' requires {path}."
+            )
+        bundles.append(load_rule_bindings_file(path))
+    if not bundles:
+        return {}
+    return merge_rule_bindings(*bundles)
 
 
 def _resolve_expected_outputs(case: HarnessCase) -> dict[str, Any] | None:

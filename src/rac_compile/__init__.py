@@ -72,6 +72,8 @@ from .rule_bindings import (
     RuleBindingError,
     RuleBindingTarget,
     RuleResolver,
+    load_rule_bindings_file,
+    merge_rule_bindings,
 )
 from .rust_generator import RustCodeGenerator
 
@@ -98,6 +100,8 @@ __all__ = [
     "RuleBindingError",
     "RuleBindingTarget",
     "RuleResolver",
+    "load_rule_bindings_file",
+    "merge_rule_bindings",
     "RacProgram",
     "CompiledInput",
     "CompiledModule",

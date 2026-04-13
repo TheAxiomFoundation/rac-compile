@@ -379,7 +379,7 @@ class RustCodeGenerator:
                 )
             lines.append(
                 "        _ => panic!("
-                + json.dumps(
+                + _rust_string_literal(
                     f"Unknown parameter index for '{parameter.name}': "
                     + "{}"
                 )
@@ -451,7 +451,7 @@ class RustCodeGenerator:
         lines.append("    let mut outputs = BTreeMap::new();")
         for output, _ in self._resolved_outputs():
             lines.append(
-                f"    outputs.insert({json.dumps(output.name)}, "
+                f"    outputs.insert({_rust_string_literal(output.name)}, "
                 f"{_render_output_value(output)});"
             )
         lines.append("")
@@ -462,18 +462,20 @@ class RustCodeGenerator:
             if parameter.source:
                 lines.append(
                     "            Citation { "
-                    f"kind: \"param\", name: {json.dumps(parameter.name)}, "
-                    f"module_identity: {json.dumps(parameter.module_identity)}, "
-                    f"source: {json.dumps(parameter.source)} "
+                    f"kind: \"param\", name: {_rust_string_literal(parameter.name)}, "
+                    "module_identity: "
+                    f"{_rust_string_literal(parameter.module_identity)}, "
+                    f"source: {_rust_string_literal(parameter.source)} "
                     "},"
                 )
         for output, variable in self._resolved_outputs():
             if variable.citation:
                 lines.append(
                     "            Citation { "
-                    f"kind: \"variable\", name: {json.dumps(output.name)}, "
-                    f"module_identity: {json.dumps(variable.module_identity)}, "
-                    f"source: {json.dumps(variable.citation)} "
+                    f"kind: \"variable\", name: {_rust_string_literal(output.name)}, "
+                    "module_identity: "
+                    f"{_rust_string_literal(variable.module_identity)}, "
+                    f"source: {_rust_string_literal(variable.citation)} "
                     "},"
                 )
         lines.append("        ],")
@@ -491,11 +493,11 @@ class RustCodeGenerator:
         for name, info in self.inputs.items():
             public_name = info["public_name"]
             lookup = (
-                f"inputs.get({json.dumps(public_name)})"
+                f"inputs.get({_rust_string_literal(public_name)})"
                 if public_name == name
                 else (
-                    f"inputs.get({json.dumps(public_name)})"
-                    f".or_else(|| inputs.get({json.dumps(name)}))"
+                    f"inputs.get({_rust_string_literal(public_name)})"
+                    f".or_else(|| inputs.get({_rust_string_literal(name)}))"
                 )
             )
             lines.append(f"    if let Some(value) = {lookup} {{")
@@ -626,7 +628,7 @@ def _render_public_input_assignment_rust(
     """Render Rust lines that coerce one public RacValue into a typed input."""
     target = f"typed_inputs.{_rust_identifier(name)}"
     if value_kind == "boolean":
-        message = json.dumps(f"Input '{public_name}' must be boolean.")
+        message = _rust_string_literal(f"Input '{public_name}' must be boolean.")
         return [
             f"{indent}{target} = match value {{",
             f"{indent}    RacValue::Bool(value) => *value,",
@@ -634,7 +636,7 @@ def _render_public_input_assignment_rust(
             f"{indent}}};",
         ]
     if value_kind == "integer":
-        message = json.dumps(f"Input '{public_name}' must be integer.")
+        message = _rust_string_literal(f"Input '{public_name}' must be integer.")
         return [
             f"{indent}{target} = match value {{",
             f"{indent}    RacValue::Integer(value) => *value,",
@@ -646,7 +648,7 @@ def _render_public_input_assignment_rust(
             f"{indent}}};",
         ]
     if value_kind == "number":
-        message = json.dumps(f"Input '{public_name}' must be numeric.")
+        message = _rust_string_literal(f"Input '{public_name}' must be numeric.")
         return [
             f"{indent}{target} = match value {{",
             f"{indent}    RacValue::Integer(value) => *value as f64,",
@@ -843,7 +845,7 @@ def _render_expression_rust(
     if isinstance(expression, NameExpr):
         if expression.name in local_bindings:
             slot = local_bindings[expression.name]
-            message = json.dumps(
+            message = _rust_string_literal(
                 f"Local {expression.name!r} was referenced before assignment."
             )
             rendered = (
@@ -1294,6 +1296,11 @@ def _rust_identifier(name: str) -> str:
     if name in _RUST_KEYWORDS:
         return f"r#{name}"
     return name
+
+
+def _rust_string_literal(value: str) -> str:
+    """Render one UTF-8 Rust string literal."""
+    return json.dumps(value, ensure_ascii=False)
 
 
 def _rust_input_type(value_kind: str) -> str:

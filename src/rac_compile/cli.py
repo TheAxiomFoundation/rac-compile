@@ -131,6 +131,14 @@ def _build_rule_bindings(
     return overrides
 
 
+def _load_rule_binding_files(paths: list[Path] | None) -> Any:
+    """Load and merge repeated binding-file arguments."""
+    bundles = [load_rule_bindings_file(path) for path in paths or []]
+    if not bundles:
+        return {}
+    return merge_rule_bindings(*bundles)
+
+
 def _build_module_packages(
     bindings: list[tuple[str, Path]] | None,
 ) -> dict[str, Path]:
@@ -177,8 +185,12 @@ def _add_program_compile_arguments(command_parser: argparse.ArgumentParser) -> N
     )
     command_parser.add_argument(
         "--binding-file",
+        action="append",
         type=Path,
-        help="Load external rule bindings from a JSON file",
+        help=(
+            "Load external rule bindings from JSON, YAML, or supported override "
+            "artifact files"
+        ),
     )
     command_parser.add_argument(
         "--parameter",
@@ -188,6 +200,7 @@ def _add_program_compile_arguments(command_parser: argparse.ArgumentParser) -> N
     )
     command_parser.add_argument(
         "--parameter-file",
+        action="append",
         type=Path,
         help=argparse.SUPPRESS,
     )
@@ -221,8 +234,8 @@ def _load_program_compile_inputs(args) -> tuple[Any, dict[str, Any]]:
         module_packages=_build_module_packages(args.package),
     )
     file_rule_bindings = merge_rule_bindings(
-        load_rule_bindings_file(args.binding_file),
-        load_rule_bindings_file(args.parameter_file),
+        _load_rule_binding_files(args.binding_file),
+        _load_rule_binding_files(args.parameter_file),
     )
     rule_bindings = merge_rule_bindings(
         file_rule_bindings,

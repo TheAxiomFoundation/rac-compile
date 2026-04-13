@@ -100,6 +100,12 @@ rac-compile compile examples/working_families/benefit_amount.rac --binding phase
 # Load rule bindings from a JSON file
 rac-compile compile examples/working_families/benefit_amount.rac --binding-file bindings.json --python -o benefit_amount.py
 
+# Load a real rac-us override artifact
+rac-compile compile examples/statute/26/32/b/2/A/base_amounts.rac \
+  --binding-file ../rac-us/irs/rev-proc-2023-34/eitc-2024.yaml \
+  --effective-date 2024-06-01 \
+  --python -o base_amounts.py
+
 # Output to stdout
 rac-compile eitc           # JavaScript
 rac-compile eitc --python  # Python
@@ -194,7 +200,7 @@ The generic `rac-compile compile` path now shares one parsed compile model for J
 - Supported: inline numeric external rule values from `.rac` `values:` blocks and single-entry temporal `.rac` source rules, with exact integer-vs-number kinds preserved in the lowered bundle
 - Supported: multi-entry temporal unified `.rac` external values and formulas when `--effective-date` is provided
 - Supported: source-only external rules when you bind them explicitly with `--binding NAME=VALUE`, `--binding module_identity.symbol=VALUE`, or indexed variants
-- Supported: source-only external rules from a JSON `--binding-file`, with inline `--binding` flags overriding file values
+- Supported: source-only external rules from repeated `--binding-file` inputs, including JSON/YAML bundles and the current `rac-us` override-artifact format, with inline `--binding` flags overriding file values
 - Supported: explicit scalar-vs-indexed external lookup contracts in the lowered bundle, with bare rule references validated against resolved value shape
 - Supported: output-focused compilation via repeated `--select-output NAME`, pruning to the reachable variable subgraph for those outputs
 - Supported: lowered bundle emission via `rac-compile lower`, producing a serializable post-resolution artifact with explicit inputs, typed external values, typed ordered computations, and typed public outputs
@@ -293,6 +299,16 @@ The compatibility-map form still works, and the older `parameters`-enveloped
 JSON shape is still accepted as an adapter. The explicit `bindings` form is the
 real contract because it carries rule identity, metadata, and optional
 effective dates.
+
+`--binding-file` can also consume the current RAC-side override artifacts already
+checked into sibling repos, such as `../rac-us/irs/rev-proc-2023-34/eitc-2024.yaml`.
+Those files resolve their `overrides: path#symbol` entries into rule bindings
+automatically, and unrelated entries are ignored when they target rules outside
+the graph you are compiling. Repeated `--binding-file` flags are merged in order.
+
+Current boundary: override artifacts are supported for scalar values and
+integer-indexed tables. Non-integer keyed artifacts, such as rate-bracket
+tables keyed by decimal rates, still fail loudly instead of being coerced.
 
 ### Compiler Harness
 

@@ -99,7 +99,20 @@ JSON rule binding file:
 rac-compile compile examples/working_families/benefit_amount.rac --binding-file bindings.json --python -o benefit_amount.py
 ```
 
-Inline `--binding` flags override file values.
+Real RAC-side override artifact:
+
+```bash
+rac-compile compile examples/statute/26/32/b/2/A/base_amounts.rac \
+  --binding-file ../rac-us/irs/rev-proc-2023-34/eitc-2024.yaml \
+  --effective-date 2024-06-01 \
+  --python -o base_amounts.py
+```
+
+Repeated `--binding-file` flags merge in order, and inline `--binding` flags
+override file values.
+
+Current boundary: override artifacts are supported for scalar values and
+integer-indexed tables. Non-integer keyed artifacts still fail loudly.
 
 ## Emit the lowered bundle
 

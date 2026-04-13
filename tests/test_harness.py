@@ -147,6 +147,16 @@ class TestCompilerHarness:
             "live_rac_us_co_regulation_import_graph_resolution"
         )
 
+    def test_run_compiler_harness_rac_us_override_yaml_live_case(self):
+        """The live lane can consume a real rac-us override YAML artifact."""
+        summary = run_compiler_harness(
+            case_names=["live_rac_us_override_yaml_binding_support"]
+        )
+
+        assert summary.total == 1
+        assert summary.passed == 1
+        assert summary.results[0].case == "live_rac_us_override_yaml_binding_support"
+
     def test_run_compiler_harness_rac_us_co_statute_import_runtime_case(self):
         """Qualified public inputs work for imported state statute rules."""
         summary = run_compiler_harness(

@@ -301,6 +301,131 @@ tax:
                 output = mock_print.call_args_list[0][0][0]
                 assert "0.45" in output
 
+    def test_compile_binding_file_supports_rac_override_yaml(self, tmp_path):
+        """Compile can load RAC-side override YAML artifacts through --binding-file."""
+        base_amounts = tmp_path / "statute" / "26" / "32" / "b" / "2" / "A"
+        base_amounts.mkdir(parents=True)
+        input_file = base_amounts / "base_amounts.rac"
+        binding_file = tmp_path / "eitc-2024.yaml"
+        input_file.write_text(
+            """
+number_of_qualifying_children:
+  entity: TaxUnit
+  period: Year
+  dtype: Integer
+  default: 0
+
+earned_income_amount:
+  source: "external/rac-us"
+
+phaseout_amount:
+  source: "external/rac-us"
+
+eitc_pair_total:
+  entity: TaxUnit
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    earned = earned_income_amount[number_of_qualifying_children]
+    phaseout = phaseout_amount[number_of_qualifying_children]
+    return earned + phaseout
+"""
+        )
+        binding_file.write_text(
+            """
+source:
+  document: "Rev. Proc. 2023-34"
+  section: "3.06"
+  effective_date: 2024-01-01
+
+earned_income_amount:
+  overrides: statute/26/32/b/2/A/base_amounts#earned_income_amount
+  indexed_by: num_qualifying_children
+  values:
+    0: 8260
+    1: 12390
+
+phaseout_amount:
+  overrides: statute/26/32/b/2/A/base_amounts#phaseout_amount
+  indexed_by: num_qualifying_children
+  values:
+    0: 10330
+    1: 22720
+"""
+        )
+        with patch(
+            "sys.argv",
+            [
+                "rac-compile",
+                "compile",
+                str(input_file),
+                "--python",
+                "--effective-date",
+                "2024-06-01",
+                "--binding-file",
+                str(binding_file),
+            ],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                output = mock_print.call_args_list[0][0][0]
+                assert "12390.0" in output
+                assert "22720.0" in output
+
+    def test_compile_repeated_binding_files_merge(self, tmp_path):
+        """Repeated binding files merge into one external-rule resolver."""
+        input_file = tmp_path / "tax.rac"
+        scalar_bundle = tmp_path / "scalar.json"
+        artifact_bundle = tmp_path / "artifact.yaml"
+        input_file.write_text(
+            """
+rate:
+  source: "external/rate"
+
+allowance:
+  source: "external/allowance"
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages * rate + allowance
+"""
+        )
+        scalar_bundle.write_text(json.dumps({"rate": 0.2}))
+        artifact_bundle.write_text(
+            """
+source:
+  title: "Allowance memo"
+  effective_date: 2024-01-01
+
+allowance:
+  overrides: tax#allowance
+  value: 5
+"""
+        )
+        with patch(
+            "sys.argv",
+            [
+                "rac-compile",
+                "compile",
+                str(input_file),
+                "--python",
+                "--effective-date",
+                "2024-06-01",
+                "--binding-file",
+                str(scalar_bundle),
+                "--binding-file",
+                str(artifact_bundle),
+            ],
+        ):
+            with patch("builtins.print") as mock_print:
+                main()
+                output = mock_print.call_args_list[0][0][0]
+                assert "0.2" in output
+                assert "5.0" in output
+
     def test_compile_supports_qualified_parameter_binding_for_imported_param(
         self, tmp_path
     ):

@@ -23,6 +23,9 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 keywords = ["rac", "rules-as-code", "tax", "benefits", "policy", "compiler", "javascript"]
+dependencies = [
+    "PyYAML>=6.0",
+]
 
 [project.optional-dependencies]
 dev = [
