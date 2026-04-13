@@ -136,6 +136,8 @@ class RustCodeGenerator:
         name: str,
         default: Any = 0,
         value_kind: str = "number",
+        *,
+        public_name: str | None = None,
     ) -> None:
         """Add an input variable."""
         if value_kind not in {"boolean", "integer", "number"}:
@@ -143,7 +145,11 @@ class RustCodeGenerator:
                 f"Rust backend does not support input kind '{value_kind}' for "
                 f"'{name}'."
             )
-        self.inputs[name] = {"default": default, "value_kind": value_kind}
+        self.inputs[name] = {
+            "default": default,
+            "value_kind": value_kind,
+            "public_name": public_name or name,
+        }
 
     def add_parameter(
         self,
@@ -230,6 +236,7 @@ class RustCodeGenerator:
         self._emit_parameters(lines)
         self._emit_input_struct(lines)
         self._emit_calculate(lines)
+        self._emit_calculate_public(lines)
         return "\n".join(lines)
 
     def _emit_header(self, lines: list[str]) -> None:
@@ -472,6 +479,37 @@ class RustCodeGenerator:
         lines.append("        ],")
         lines.append("    }")
         lines.append("}")
+        lines.append("")
+
+    def _emit_calculate_public(self, lines: list[str]) -> None:
+        """Emit a map-based public input entrypoint keyed by rule identity."""
+        lines.append(
+            "pub fn calculate_public(inputs: &BTreeMap<String, RacValue>) "
+            "-> CalculationResult {"
+        )
+        lines.append("    let mut typed_inputs = CalculateInputs::default();")
+        for name, info in self.inputs.items():
+            public_name = info["public_name"]
+            lookup = (
+                f"inputs.get({json.dumps(public_name)})"
+                if public_name == name
+                else (
+                    f"inputs.get({json.dumps(public_name)})"
+                    f".or_else(|| inputs.get({json.dumps(name)}))"
+                )
+            )
+            lines.append(f"    if let Some(value) = {lookup} {{")
+            lines.extend(
+                _render_public_input_assignment_rust(
+                    name=name,
+                    public_name=public_name,
+                    value_kind=info["value_kind"],
+                    indent="        ",
+                )
+            )
+            lines.append("    }")
+        lines.append("    calculate(typed_inputs)")
+        lines.append("}")
 
     def _normalize_outputs(self, output_names: list[Any]) -> list[Output]:
         """Normalize output bindings from strings or output-like objects."""
@@ -575,6 +613,50 @@ def _render_output_value(output: Output) -> str:
         return f"RacValue::String({variable_name}.to_string())"
     raise _compilation_error(
         f"Rust backend does not support output kind '{output.value_kind}'."
+    )
+
+
+def _render_public_input_assignment_rust(
+    *,
+    name: str,
+    public_name: str,
+    value_kind: str,
+    indent: str,
+) -> list[str]:
+    """Render Rust lines that coerce one public RacValue into a typed input."""
+    target = f"typed_inputs.{_rust_identifier(name)}"
+    if value_kind == "boolean":
+        message = json.dumps(f"Input '{public_name}' must be boolean.")
+        return [
+            f"{indent}{target} = match value {{",
+            f"{indent}    RacValue::Bool(value) => *value,",
+            f"{indent}    _ => panic!({message}),",
+            f"{indent}}};",
+        ]
+    if value_kind == "integer":
+        message = json.dumps(f"Input '{public_name}' must be integer.")
+        return [
+            f"{indent}{target} = match value {{",
+            f"{indent}    RacValue::Integer(value) => *value,",
+            (
+                f"{indent}    RacValue::Number(value) "
+                "if value.fract() == 0.0 => *value as i64,"
+            ),
+            f"{indent}    _ => panic!({message}),",
+            f"{indent}}};",
+        ]
+    if value_kind == "number":
+        message = json.dumps(f"Input '{public_name}' must be numeric.")
+        return [
+            f"{indent}{target} = match value {{",
+            f"{indent}    RacValue::Integer(value) => *value as f64,",
+            f"{indent}    RacValue::Number(value) => *value,",
+            f"{indent}    _ => panic!({message}),",
+            f"{indent}}};",
+        ]
+    raise _compilation_error(
+        f"Rust backend does not support public input kind '{value_kind}' for "
+        f"'{name}'."
     )
 
 

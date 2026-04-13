@@ -210,6 +210,7 @@ The generic `rac-compile compile` path now shares one parsed compile model for J
 - Supported: selective imports via `from "./shared.rac" import tax, threshold as income_threshold`
 - Supported: entry-file output selection against the public export surface, including aliased output names
 - Supported: first-class rule/module identity preserved through lowered bundles and generated citations; canonical `statute/...`, `regulation/...`, and `legislation/...` files use their path identity
+- Supported: imported free inputs are exposed in lowered bundles and generated runtime interfaces as `module_identity.symbol` instead of merged internal names
 - Unsupported: package registries, remote imports, nested namespace chains beyond `alias.value`, wildcard re-exports, loops, match/case, try/except, and other statement forms outside assignments, `if` / `elif` / `else`, and `return`
 - Unsupported: attribute access, custom helper calls, slices, and other expression forms outside the validated scalar subset
 - Unsupported: string formula literals in Rust output, and the prebuilt `rac-compile eitc` shortcut still only emits JavaScript or Python

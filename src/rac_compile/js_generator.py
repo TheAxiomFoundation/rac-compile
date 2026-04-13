@@ -65,12 +65,23 @@ class JSCodeGenerator:
         self.outputs: list[Output] | None = None
         self.inputs: dict[str, Any] = {}  # name -> default value
 
-    def add_input(self, name: str, default: Any = 0, type_hint: str = "number") -> None:
+    def add_input(
+        self,
+        name: str,
+        default: Any = 0,
+        type_hint: str = "number",
+        *,
+        public_name: str | None = None,
+    ) -> None:
         """Add an input variable."""
         # Convert Python booleans to JS
         if isinstance(default, bool):
             default = "true" if default else "false"
-        self.inputs[name] = {"default": default, "type": type_hint}
+        self.inputs[name] = {
+            "default": default,
+            "type": type_hint,
+            "public_name": public_name or name,
+        }
 
     def add_parameter(
         self,
@@ -173,15 +184,25 @@ class JSCodeGenerator:
         lines.append(" * Calculate tax/benefit values with full citation chain.")
         lines.append(" *")
         for name, info in self.inputs.items():
-            lines.append(f" * @param {{{info['type']}}} {name}")
+            lines.append(f" * @param {{{info['type']}}} {info['public_name']}")
         lines.append(" * @returns {{result: number, citations: Array}}")
         lines.append(" */")
 
         # Function signature
-        params = ", ".join(
-            f"{name} = {info['default']}" for name, info in self.inputs.items()
-        )
-        lines.append(f"function calculate({{ {params} }}) {{")
+        if self._can_use_destructured_js_inputs():
+            params = ", ".join(
+                self._render_js_input_binding(name, info)
+                for name, info in self.inputs.items()
+            )
+            lines.append(f"function calculate({{ {params} }} = {{}}) {{")
+        else:
+            lines.append("function calculate(inputs = {}) {")
+            for name, info in self.inputs.items():
+                lines.append(
+                    f"  const {name} = {self._render_js_input_lookup(name, info)};"
+                )
+            if self.inputs:
+                lines.append("")
 
         # Add calculations
         for var in self.variables:
@@ -438,7 +459,13 @@ class JSCodeGenerator:
         # Interface for inputs
         lines.append("interface CalculatorInputs {")
         for name, info in self.inputs.items():
-            lines.append(f"  {name}?: {info['type']};")
+            public_name = info["public_name"]
+            property_name = (
+                public_name
+                if _is_valid_js_identifier(public_name)
+                else f'"{public_name}"'
+            )
+            lines.append(f"  {property_name}?: {info['type']};")
         lines.append("}")
         lines.append("")
 
@@ -458,12 +485,17 @@ class JSCodeGenerator:
         lines.append(
             "function calculate(inputs: CalculatorInputs = {}): CalculatorResult {"
         )
-
-        # Destructure with defaults
-        destructure = ", ".join(
-            f"{name} = {info['default']}" for name, info in self.inputs.items()
-        )
-        lines.append(f"  const {{ {destructure} }} = inputs;")
+        if self._can_use_destructured_js_inputs():
+            destructure = ", ".join(
+                self._render_js_input_binding(name, info)
+                for name, info in self.inputs.items()
+            )
+            lines.append(f"  const {{ {destructure} }} = inputs;")
+        else:
+            for name, info in self.inputs.items():
+                lines.append(
+                    f"  const {name} = {self._render_js_input_lookup(name, info)};"
+                )
         lines.append("")
 
         # Calculations
@@ -532,6 +564,43 @@ class JSCodeGenerator:
         return [
             (output, variables_by_name[output.variable_name]) for output in self.outputs
         ]
+
+    def _can_use_destructured_js_inputs(self) -> bool:
+        """Return whether public input names are safe for JS destructuring."""
+        return all(
+            _is_valid_js_identifier(info["public_name"])
+            for info in self.inputs.values()
+        )
+
+    def _render_js_input_binding(self, name: str, info: dict[str, Any]) -> str:
+        """Render one JS destructured input binding."""
+        public_name = info["public_name"]
+        if public_name == name:
+            return f"{name} = {info['default']}"
+        return f"{public_name}: {name} = {info['default']}"
+
+    def _render_js_input_lookup(self, name: str, info: dict[str, Any]) -> str:
+        """Render one JS lookup expression for a public input."""
+        public_name = info["public_name"]
+        default = info["default"]
+        if public_name == name:
+            return (
+                "Object.prototype.hasOwnProperty.call(inputs, "
+                f"{public_name!r}) ? inputs[{public_name!r}] : {default}"
+            )
+        return (
+            "Object.prototype.hasOwnProperty.call(inputs, "
+            f"{public_name!r}) ? inputs[{public_name!r}] : "
+            "("
+            "Object.prototype.hasOwnProperty.call(inputs, "
+            f"{name!r}) ? inputs[{name!r}] : {default}"
+            ")"
+        )
+
+
+def _is_valid_js_identifier(name: str) -> bool:
+    """Return whether one name is safe to use as a JS identifier."""
+    return bool(re.fullmatch(r"[A-Za-z_$][\w$]*", name))
 
 
 def generate_eitc_calculator(tax_year: int = 2025) -> str:

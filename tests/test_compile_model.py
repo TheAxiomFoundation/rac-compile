@@ -6,6 +6,7 @@ import pytest
 
 from src.rac_compile.compile_model import CompilationError, LoweredProgram
 from src.rac_compile.parser import parse_rac
+from src.rac_compile.program import load_rac_program
 
 
 class TestCompiledModule:
@@ -64,7 +65,54 @@ ctc_meets_citizenship_requirement:
         assert [compiled_input.name for compiled_input in lowered.inputs] == [
             "is_us_citizen_national_or_resident"
         ]
+        assert [compiled_input.public_name for compiled_input in lowered.inputs] == [
+            "is_us_citizen_national_or_resident"
+        ]
         assert lowered.inputs[0].value_kind == "boolean"
+
+    def test_imported_declared_inputs_lower_with_qualified_public_names(self, tmp_path):
+        """Imported free inputs keep rule-identity public names in lowered bundles."""
+        shared = tmp_path / "statute" / "shared" / "rate.rac"
+        shared.parent.mkdir(parents=True)
+        shared.write_text(
+            """
+wages:
+  entity: Person
+  period: Year
+  dtype: Money
+
+taxable_amount:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    wages * 2
+"""
+        )
+        entry = tmp_path / "statute" / "shared" / "benefit.rac"
+        entry.write_text(
+            """
+imports:
+  - statute/shared/rate#taxable_amount
+
+benefit:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    taxable_amount + base_amount
+"""
+        )
+
+        lowered = load_rac_program(entry).to_lowered_program()
+
+        assert {
+            compiled_input.public_name or compiled_input.name
+            for compiled_input in lowered.inputs
+        } == {
+            "statute/shared/rate.wages",
+            "base_amount",
+        }
 
     def test_no_formula_variables_without_explicit_defaults_use_typed_fallbacks(self):
         """Declared inputs without defaults fall back from dtype, not heuristics."""

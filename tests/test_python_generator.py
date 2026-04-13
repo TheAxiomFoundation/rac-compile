@@ -107,6 +107,27 @@ class TestGenerateOutput:
         assert "income: float = 0" in code
         assert "return {" in code
 
+    def test_generate_supports_public_input_names_that_are_not_identifiers(self):
+        """Qualified public input names fall back to mapping-based Python inputs."""
+        from src.rac_compile.python_generator import PythonCodeGenerator
+
+        gen = PythonCodeGenerator()
+        gen.add_input(
+            "shared_income",
+            0,
+            "float",
+            public_name="shared.rate.income",
+        )
+        gen.add_variable("tax", ["shared_income"], "shared_income * 2")
+        code = gen.generate()
+        namespace: dict[str, object] = {}
+
+        exec(code, namespace)
+        result = namespace["calculate"](**{"shared.rate.income": 5})
+
+        assert "def calculate(inputs: dict[str, Any] | None = None" in code
+        assert result["tax"] == 10
+
     def test_generate_returns_citations(self):
         """Generated code returns citation chain."""
         from src.rac_compile.python_generator import PythonCodeGenerator

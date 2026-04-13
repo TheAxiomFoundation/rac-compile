@@ -403,18 +403,56 @@ participant_is_subject_to_sanction_for_noncompliance_with_individual_responsibil
         )
 
         assert {
-            compiled_input.name for compiled_input in lowered.inputs
+            compiled_input.public_name or compiled_input.name
+            for compiled_input in lowered.inputs
         } == {
             "participant_fails_to_comply_with_terms_and_conditions_of_contract",
             "good_cause_exists_as_determined_by_county",
-            "statute_crs_26_2_703_12_contract_is_entered_into_by_participant_and_county_department",
-            "statute_crs_26_2_703_12_contract_is_pursuant_to_section_26_2_708",
+            (
+                "statute/crs/26-2-703/12."
+                "contract_is_entered_into_by_participant_and_county_department"
+            ),
+            "statute/crs/26-2-703/12.contract_is_pursuant_to_section_26_2_708",
         }
         assert (
-            "statute_crs_26_2_703_12_is_individual_responsibility_contract"
-            not in {compiled_input.name for compiled_input in lowered.inputs}
+            "statute/crs/26-2-703/12.is_individual_responsibility_contract"
+            not in {
+                compiled_input.public_name or compiled_input.name
+                for compiled_input in lowered.inputs
+            }
         )
         assert lowered.outputs[0].module_identity == "statute/crs/26-2-711/1/a/I"
+
+        namespace: dict[str, object] = {}
+        code = load_rac_program(entry).to_python_generator(
+            outputs=[
+                "participant_is_subject_to_sanction_for_noncompliance_with_individual_responsibility_contract"
+            ]
+        ).generate()
+
+        exec(code, namespace)
+
+        result = namespace["calculate"](
+            **{
+                (
+                    "statute/crs/26-2-703/12."
+                    "contract_is_entered_into_by_participant_and_county_department"
+                ): True,
+                (
+                    "statute/crs/26-2-703/12."
+                    "contract_is_pursuant_to_section_26_2_708"
+                ): True,
+                (
+                    "participant_fails_to_comply_with_terms_and_conditions_of_"
+                    "contract"
+                ): True,
+                "good_cause_exists_as_determined_by_county": False,
+            }
+        )
+
+        assert result[
+            "participant_is_subject_to_sanction_for_noncompliance_with_individual_responsibility_contract"
+        ] is True
 
     def test_selected_outputs_prune_unreachable_imported_variables(self, tmp_path):
         """Graph pruning excludes unreachable imported variables before validation."""

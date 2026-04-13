@@ -724,37 +724,73 @@ tax:
         name="live_rac_us_co_regulation_import_graph_resolution",
         category="live_stack",
         description=(
-            "State regulation imports should resolve through the file graph instead "
-            "of surfacing imported computed rules as free inputs."
+            "State regulation imports should surface imported free inputs through "
+            "qualified rule-identity names instead of merged internal names."
         ),
         workspace_entrypoint="rac-us-co/regulation/9-CCR-2503-6/3.606.1/H.rac",
         outputs=["meets_gross_income_need_standard_test"],
-        forbidden_input_names=["need_standard_for_assistance_unit"],
+        inputs={
+            (
+                "regulation/9-CCR-2503-6/3.606.1/F."
+                "number_of_children_in_assistance_unit"
+            ): 2,
+            (
+                "regulation/9-CCR-2503-6/3.606.1/F."
+                "number_of_caretakers_in_assistance_unit"
+            ): 1,
+            "countable_gross_earned_income_after_disregards": 200,
+            "countable_unearned_income": 200,
+        },
+        expected_input_names=[
+            "regulation/9-CCR-2503-6/3.606.1/F.number_of_children_in_assistance_unit",
+            "regulation/9-CCR-2503-6/3.606.1/F.number_of_caretakers_in_assistance_unit",
+            "countable_gross_earned_income_after_disregards",
+            "countable_unearned_income",
+        ],
         expected_output_module_identities={
             "meets_gross_income_need_standard_test": "regulation/9-CCR-2503-6/3.606.1/H"
         },
-        targets=(),
+        expected_outputs={"meets_gross_income_need_standard_test": True},
         live=True,
     ),
     HarnessCase(
         name="live_rac_us_co_statute_import_graph_resolution",
         category="live_stack",
         description=(
-            "State statute imports should resolve root-qualified `imports:` blocks "
-            "without surfacing imported computed rules as free inputs."
+            "State statute imports should surface upstream rule inputs through "
+            "qualified rule-identity names."
         ),
         workspace_entrypoint="rac-us-co/statute/crs/26-2-711/1/a/I.rac",
         outputs=[
             "participant_is_subject_to_sanction_for_noncompliance_with_individual_responsibility_contract"
         ],
-        forbidden_input_names=["is_individual_responsibility_contract"],
+        inputs={
+            (
+                "statute/crs/26-2-703/12."
+                "contract_is_entered_into_by_participant_and_county_department"
+            ): True,
+            "statute/crs/26-2-703/12.contract_is_pursuant_to_section_26_2_708": True,
+            "participant_fails_to_comply_with_terms_and_conditions_of_contract": True,
+            "good_cause_exists_as_determined_by_county": False,
+        },
+        expected_input_names=[
+            "statute/crs/26-2-703/12.contract_is_entered_into_by_participant_and_county_department",
+            "statute/crs/26-2-703/12.contract_is_pursuant_to_section_26_2_708",
+            "participant_fails_to_comply_with_terms_and_conditions_of_contract",
+            "good_cause_exists_as_determined_by_county",
+        ],
         expected_output_module_identities={
             (
                 "participant_is_subject_to_sanction_for_noncompliance_with_"
                 "individual_responsibility_contract"
             ): "statute/crs/26-2-711/1/a/I"
         },
-        targets=(),
+        expected_outputs={
+            (
+                "participant_is_subject_to_sanction_for_noncompliance_with_"
+                "individual_responsibility_contract"
+            ): True
+        },
         live=True,
     ),
 )
@@ -891,8 +927,8 @@ def _run_case(case: HarnessCase) -> HarnessResult:
         runtime_inputs = None
         if case.inputs is not None:
             lowered_input_names = {
-                compiled_input.name for compiled_input in lowered_program.inputs
-            }
+                lowered_input.external_name for lowered_input in lowered_program.inputs
+            } | {lowered_input.name for lowered_input in lowered_program.inputs}
             runtime_inputs = {
                 name: value
                 for name, value in case.inputs.items()
@@ -966,8 +1002,9 @@ def _run_case(case: HarnessCase) -> HarnessResult:
             and expected_outputs is not None
         ):
             rust_input_kinds = {
-                compiled_input.name: compiled_input.value_kind
+                name: compiled_input.value_kind
                 for compiled_input in lowered_program.inputs
+                for name in {compiled_input.external_name, compiled_input.name}
             }
             runtime_detail = _check_rust_runtime(
                 generated["rust"],
@@ -1163,7 +1200,10 @@ def _check_lowered_program(
 ) -> str | None:
     """Verify that the lowered bundle is serializable and internally consistent."""
     payload = json.loads(program.to_json())
-    input_names = [compiled_input["name"] for compiled_input in payload["inputs"]]
+    input_names = [
+        compiled_input.get("public_name") or compiled_input["name"]
+        for compiled_input in payload["inputs"]
+    ]
     if case.expected_input_names is not None and set(input_names) != set(
         case.expected_input_names
     ):
@@ -1412,13 +1452,16 @@ def _check_rust_runtime(
                     code,
                     "",
                     "fn main() {",
-                    "    let result = calculate(CalculateInputs {",
+                    "    let mut public_inputs = BTreeMap::new();",
                     *[
-                        _format_rust_input_binding(name, value, input_value_kinds)
+                        _format_rust_public_input_binding(
+                            name,
+                            value,
+                            input_value_kinds,
+                        )
                         for name, value in inputs.items()
                     ],
-                    "        ..Default::default()",
-                    "    });",
+                    "    let result = calculate_public(&public_inputs);",
                     "    for (name, value) in result.outputs.iter() {",
                     '        println!("{}={:?}", name, value);',
                     "    }",
@@ -1533,6 +1576,26 @@ def _format_rust_input_binding(
         "        "
         f"{name}: "
         f"{_render_rust_input_literal(value, input_value_kinds.get(name, 'number'))},"
+    )
+
+
+def _format_rust_public_input_binding(
+    name: str,
+    value: Any,
+    input_value_kinds: dict[str, str],
+) -> str:
+    """Render one Rust public-input map insertion for harness execution."""
+    literal = _render_rust_input_literal(value, input_value_kinds.get(name, "number"))
+    kind = input_value_kinds.get(name, "number")
+    if kind == "boolean":
+        rendered = f"RacValue::Bool({literal})"
+    elif kind == "integer":
+        rendered = f"RacValue::Integer({literal})"
+    else:
+        rendered = f"RacValue::Number({literal})"
+    return (
+        "    public_inputs.insert("
+        f"{json.dumps(name)}.to_string(), {rendered});"
     )
 
 

@@ -85,7 +85,10 @@ def _normalize_batch_inputs(
 
     normalized: dict[str, np.ndarray] = {}
     for compiled_input in program.inputs:
-        raw_value = raw_inputs.get(compiled_input.name, compiled_input.default)
+        raw_value = raw_inputs.get(
+            compiled_input.external_name,
+            raw_inputs.get(compiled_input.name, compiled_input.default),
+        )
         normalized[compiled_input.name] = _coerce_value_kind(
             raw_value,
             compiled_input.value_kind,

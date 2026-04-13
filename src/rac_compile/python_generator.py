@@ -6,6 +6,8 @@ and used in Python applications without any dependencies.
 """
 
 import ast
+import json
+import keyword
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -66,9 +68,20 @@ class PythonCodeGenerator:
         self.outputs: list[Output] | None = None
         self.inputs: dict[str, Any] = {}  # name -> default value
 
-    def add_input(self, name: str, default: Any = 0, type_hint: str = "float") -> None:
+    def add_input(
+        self,
+        name: str,
+        default: Any = 0,
+        type_hint: str = "float",
+        *,
+        public_name: str | None = None,
+    ) -> None:
         """Add an input variable."""
-        self.inputs[name] = {"default": default, "type": type_hint}
+        self.inputs[name] = {
+            "default": default,
+            "type": type_hint,
+            "public_name": public_name or name,
+        }
 
     def add_parameter(
         self,
@@ -173,38 +186,10 @@ class PythonCodeGenerator:
 
     def _generate_function(self, lines: list[str]) -> None:
         """Generate Python function."""
-        # Function signature
-        if self.type_hints:
-            # Build parameter list with type hints
-            params = []
-            for name, info in self.inputs.items():
-                type_str = info["type"]
-                default = info["default"]
-                if isinstance(default, bool):
-                    default_str = str(default)
-                elif isinstance(default, str):
-                    default_str = f'"{default}"'
-                else:
-                    default_str = str(default)
-                params.append(f"{name}: {type_str} = {default_str}")
-
-            params_str = ", ".join(params) if params else ""
-            lines.append(f"def calculate({params_str}) -> dict[str, Any]:")
+        if self._can_use_explicit_signature():
+            self._generate_explicit_function_signature(lines)
         else:
-            # No type hints
-            params = []
-            for name, info in self.inputs.items():
-                default = info["default"]
-                if isinstance(default, bool):
-                    default_str = str(default)
-                elif isinstance(default, str):
-                    default_str = f'"{default}"'
-                else:
-                    default_str = str(default)
-                params.append(f"{name}={default_str}")
-
-            params_str = ", ".join(params) if params else ""
-            lines.append(f"def calculate({params_str}):")
+            self._generate_mapping_function_signature(lines)
 
         # Docstring
         lines.append('    """')
@@ -214,11 +199,29 @@ class PythonCodeGenerator:
             lines.append("    Args:")
             break
         for name, info in self.inputs.items():
-            lines.append(f"        {name}: {info['type']}")
+            lines.append(f"        {info['public_name']}: {info['type']}")
         lines.append("")
         lines.append("    Returns:")
         lines.append("        Dictionary with calculated values and citations")
         lines.append('    """')
+
+        if self._can_use_explicit_signature():
+            for name, info in self.inputs.items():
+                public_name = info["public_name"]
+                if public_name != name:
+                    lines.append(f"    {name} = {public_name}")
+            if self.inputs:
+                lines.append("")
+        else:
+            lines.append("    input_values = dict(inputs or {})")
+            lines.append("    input_values.update(kwargs)")
+            for name, info in self.inputs.items():
+                lines.append(
+                    f"    {name} = "
+                    f"{self._render_python_input_lookup(name, info)}"
+                )
+            if self.inputs:
+                lines.append("")
 
         # Add calculations
         for var in self.variables:
@@ -259,6 +262,58 @@ class PythonCodeGenerator:
                 )
         lines.append("        ],")
         lines.append("    }")
+
+    def _generate_explicit_function_signature(self, lines: list[str]) -> None:
+        """Generate a Python signature with named keyword parameters."""
+        params: list[str] = []
+        for _, info in self.inputs.items():
+            default_str = self._render_python_default(info["default"])
+            public_name = info["public_name"]
+            if self.type_hints:
+                params.append(f"{public_name}: {info['type']} = {default_str}")
+            else:
+                params.append(f"{public_name}={default_str}")
+
+        params_str = ", ".join(params) if params else ""
+        if self.type_hints:
+            lines.append(f"def calculate({params_str}) -> dict[str, Any]:")
+        else:
+            lines.append(f"def calculate({params_str}):")
+
+    def _generate_mapping_function_signature(self, lines: list[str]) -> None:
+        """Generate a Python signature that accepts arbitrary public input keys."""
+        if self.type_hints:
+            lines.append(
+                "def calculate("
+                "inputs: dict[str, Any] | None = None, **kwargs: Any"
+                ") -> dict[str, Any]:"
+            )
+        else:
+            lines.append("def calculate(inputs=None, **kwargs):")
+
+    def _can_use_explicit_signature(self) -> bool:
+        """Return whether all public input names are valid Python parameters."""
+        return all(
+            _is_valid_python_identifier(info["public_name"])
+            for info in self.inputs.values()
+        )
+
+    def _render_python_input_lookup(self, name: str, info: dict[str, Any]) -> str:
+        """Render a Python lookup expression for one public input."""
+        default_str = self._render_python_default(info["default"])
+        public_name = info["public_name"]
+        if public_name == name:
+            return f"input_values.get({public_name!r}, {default_str})"
+        return (
+            f"input_values.get({public_name!r}, "
+            f"input_values.get({name!r}, {default_str}))"
+        )
+
+    def _render_python_default(self, default: Any) -> str:
+        """Render one Python default literal."""
+        if isinstance(default, str):
+            return json.dumps(default)
+        return repr(default)
 
     def _is_block_formula(self, formula_python: str) -> bool:
         """Return whether the formula must be emitted as a statement block."""
@@ -381,6 +436,11 @@ class PythonCodeGenerator:
         return [
             (output, variables_by_name[output.variable_name]) for output in self.outputs
         ]
+
+
+def _is_valid_python_identifier(name: str) -> bool:
+    """Return whether one name can be used as a Python parameter."""
+    return name.isidentifier() and not keyword.iskeyword(name)
 
 
 def generate_eitc_calculator(tax_year: int = 2025) -> str:

@@ -24,26 +24,47 @@ def _run_rust(
         pytest.skip("rustc is required for Rust generator tests.")
 
     input_value_kinds = {
-        compiled_input.name: compiled_input.value_kind
+        name: compiled_input.value_kind
         for compiled_input in lowered_inputs
+        for name in {
+            compiled_input.public_name or compiled_input.name,
+            compiled_input.name,
+        }
     }
+    uses_public_map = any(
+        (compiled_input.public_name or compiled_input.name) != compiled_input.name
+        for compiled_input in lowered_inputs
+    )
     with tempfile.TemporaryDirectory(prefix="rac_compile_rust_test_") as tmp_dir:
         root = Path(tmp_dir)
         source = root / "main.rs"
         binary = root / "calculator"
+        if uses_public_map:
+            input_lines = [
+                "    let mut public_inputs = BTreeMap::new();",
+                *[
+                    _format_rust_public_input_binding(name, value, input_value_kinds)
+                    for name, value in inputs.items()
+                ],
+                "    let result = calculate_public(&public_inputs);",
+            ]
+        else:
+            input_lines = [
+                "    let result = calculate(CalculateInputs {",
+                *[
+                    _format_rust_input_binding(name, value, input_value_kinds)
+                    for name, value in inputs.items()
+                ],
+                "        ..Default::default()",
+                "    });",
+            ]
         source.write_text(
             "\n".join(
                 [
                     code,
                     "",
                     "fn main() {",
-                    "    let result = calculate(CalculateInputs {",
-                    *[
-                        _format_rust_input_binding(name, value, input_value_kinds)
-                        for name, value in inputs.items()
-                    ],
-                    "        ..Default::default()",
-                    "    });",
+                    *input_lines,
                     "    for (name, value) in result.outputs.iter() {",
                     '        println!("{}={:?}", name, value);',
                     "    }",
@@ -92,6 +113,26 @@ def _format_rust_input_binding(
         "        "
         f"{name}: "
         f"{_render_rust_literal(value, input_value_kinds.get(name, 'number'))},"
+    )
+
+
+def _format_rust_public_input_binding(
+    name: str,
+    value: object,
+    input_value_kinds: dict[str, str],
+) -> str:
+    """Render one Rust public-input map insertion for test execution."""
+    kind = input_value_kinds.get(name, "number")
+    literal = _render_rust_literal(value, kind)
+    if kind == "boolean":
+        rendered = f"RacValue::Bool({literal})"
+    elif kind == "integer":
+        rendered = f"RacValue::Integer({literal})"
+    else:
+        rendered = f"RacValue::Number({literal})"
+    return (
+        "    public_inputs.insert("
+        f"\"{name}\".to_string(), {rendered});"
     )
 
 
@@ -226,6 +267,45 @@ count:
         assert "pub module_identity: &'static str" in code
         assert 'module_identity: "shared"' in code
         assert 'module_identity: "benefit_amount"' in code
+
+    def test_rust_generation_supports_public_input_map_names(self):
+        """Rust emits a public map-based entrypoint for qualified input names."""
+        gen = RustCodeGenerator()
+        gen.add_input(
+            "shared_income",
+            0,
+            "number",
+            public_name="shared.rate.income",
+        )
+        gen.add_variable(
+            "tax",
+            statements=(
+                ReturnStmt(
+                    BinaryExpr(NameExpr("shared_income"), "*", LiteralExpr(2.0))
+                ),
+            ),
+            local_names=(),
+            local_value_kinds={},
+            parameter_dependencies=(),
+        )
+        code = gen.generate()
+        lowered_inputs = (
+            LoweredInput(
+                name="shared_income",
+                default=0,
+                value_kind="number",
+                public_name="shared.rate.income",
+            ),
+        )
+
+        stdout = _run_rust(
+            code,
+            {"shared.rate.income": 5},
+            lowered_inputs,
+        )
+
+        assert "pub fn calculate_public" in code
+        assert "tax=Number(10" in stdout
 
     def test_integer_scalar_parameter_reference_stays_exact_in_rust(self):
         """Direct integer parameter references emit exact i64 helpers and outputs."""

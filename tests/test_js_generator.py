@@ -102,6 +102,43 @@ class TestGenerateOutput:
         assert "x = 0" in code
         assert "const y = x * 2" in code
 
+    def test_generate_supports_public_input_names_that_are_not_identifiers(self):
+        """Qualified public input names fall back to object lookups in JS."""
+        gen = JSCodeGenerator()
+        gen.add_input(
+            "shared_income",
+            0,
+            "number",
+            public_name="shared.rate.income",
+        )
+        gen.add_variable("tax", ["shared_income"], "shared_income * 2")
+
+        code = gen.generate()
+
+        assert (
+            'inputs["shared.rate.income"]' in code
+            or "inputs['shared.rate.income']" in code
+        )
+
+        if shutil.which("node") is None:
+            pytest.skip("Node.js is required for JS runtime execution tests.")
+
+        script = "\n".join(
+            [
+                code,
+                'console.log(JSON.stringify(calculate({ "shared.rate.income": 5 })));',
+            ]
+        )
+        proc = subprocess.run(
+            ["node", "--input-type=module"],
+            input=script,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        result = proc.stdout.splitlines()[-1]
+        assert '"tax":10' in result
+
     def test_generate_returns_citations(self):
         """Generated calculate returns citation chain."""
         gen = JSCodeGenerator()

@@ -118,6 +118,11 @@ The lowered JSON includes:
 - ordered computations, each with `module_identity`
 - typed outputs, each with `module_identity`
 
+When an input comes from an imported rule, its public lowered/runtime name is
+`module_identity.symbol` rather than the compiler's merged internal helper name.
+Generated Python/JS calculators accept those qualified names directly, and the
+Rust output provides `calculate_public(...)` for the same public-input contract.
+
 This is the backend-neutral seam between RAC source and target-specific codegen.
 For canonical RAC trees, `module_identity` comes from the `statute/...`,
 `regulation/...`, or `legislation/...` path. For ad hoc files outside those

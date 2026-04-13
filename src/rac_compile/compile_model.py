@@ -73,6 +73,14 @@ class CompiledInput:
     default: Any
     js_type: str
     python_type: str
+    public_name: str = ""
+    module_identity: str = ""
+    symbol_name: str = ""
+
+    @property
+    def external_name(self) -> str:
+        """Return the user-facing input name exposed by generated targets."""
+        return self.public_name or self.name
 
 
 @dataclass
@@ -113,6 +121,14 @@ class LoweredInput:
     name: str
     default: Any
     value_kind: str
+    public_name: str = ""
+    module_identity: str = ""
+    symbol_name: str = ""
+
+    @property
+    def external_name(self) -> str:
+        """Return the user-facing input name exposed by generated targets."""
+        return self.public_name or self.name
 
     @property
     def js_type(self) -> str:
@@ -136,6 +152,9 @@ class LoweredInput:
             "name": self.name,
             "default": self.default,
             "value_kind": self.value_kind,
+            "public_name": self.public_name,
+            "module_identity": self.module_identity,
+            "symbol_name": self.symbol_name,
         }
 
     @classmethod
@@ -158,7 +177,21 @@ class LoweredInput:
                 subject=f"Lowered input '{name}'",
                 allowed=_LOWERED_INPUT_VALUE_KINDS,
             )
-        return cls(name=name, default=default, value_kind=value_kind)
+        public_name = payload.get("public_name", name)
+        module_identity = payload.get("module_identity", "")
+        symbol_name = payload.get("symbol_name") or _infer_input_symbol_name(
+            name=name,
+            public_name=public_name,
+            module_identity=module_identity,
+        )
+        return cls(
+            name=name,
+            default=default,
+            value_kind=value_kind,
+            public_name=public_name,
+            module_identity=module_identity,
+            symbol_name=symbol_name,
+        )
 
 
 @dataclass(frozen=True)
@@ -487,6 +520,7 @@ class LoweredProgram:
                 compiled_input.name,
                 compiled_input.default,
                 compiled_input.js_type,
+                public_name=compiled_input.external_name,
             )
 
         for parameter in self.parameters:
@@ -520,6 +554,7 @@ class LoweredProgram:
                 compiled_input.name,
                 compiled_input.default,
                 compiled_input.python_type,
+                public_name=compiled_input.external_name,
             )
 
         for parameter in self.parameters:
@@ -551,6 +586,7 @@ class LoweredProgram:
                 compiled_input.name,
                 compiled_input.default,
                 compiled_input.value_kind,
+                public_name=compiled_input.external_name,
             )
 
         for parameter in self.parameters:
@@ -937,6 +973,9 @@ def _lower_input(compiled_input: CompiledInput) -> LoweredInput:
         name=compiled_input.name,
         default=compiled_input.default,
         value_kind=value_kind,
+        public_name=compiled_input.external_name,
+        module_identity=compiled_input.module_identity,
+        symbol_name=compiled_input.symbol_name or compiled_input.name,
     )
 
 
@@ -1784,17 +1823,44 @@ def _build_declared_inputs(
     }
 
 
+def _input_public_name(rule: "RuleDecl") -> str:
+    """Return the user-facing name for one compiled input rule."""
+    symbol_name = rule.symbol_name or rule.name
+    if rule.name == symbol_name:
+        return symbol_name
+    if rule.module_identity:
+        return f"{rule.module_identity}.{symbol_name}"
+    return symbol_name
+
+
+def _infer_input_symbol_name(
+    *,
+    name: str,
+    public_name: str,
+    module_identity: str,
+) -> str:
+    """Infer one input symbol name when loading older lowered bundles."""
+    if module_identity and public_name.startswith(f"{module_identity}."):
+        return public_name[len(module_identity) + 1 :]
+    return public_name or name
+
+
 def _compile_declared_input(rule: "RuleDecl") -> CompiledInput:
     """Compile a no-formula variable declaration into one typed public input."""
     inferred = _infer_input(rule.name)
     value_kind = _declared_rule_value_kind(rule) or _input_value_kind(inferred)
     default = _resolve_declared_input_default(rule, value_kind, inferred.default)
+    public_name = _input_public_name(rule)
+    symbol_name = rule.symbol_name or rule.name
     if value_kind == "boolean":
         return CompiledInput(
             name=rule.name,
             default=default,
             js_type="boolean",
             python_type="bool",
+            public_name=public_name,
+            module_identity=rule.module_identity,
+            symbol_name=symbol_name,
         )
     if value_kind == "integer":
         return CompiledInput(
@@ -1802,6 +1868,9 @@ def _compile_declared_input(rule: "RuleDecl") -> CompiledInput:
             default=default,
             js_type="number",
             python_type="int",
+            public_name=public_name,
+            module_identity=rule.module_identity,
+            symbol_name=symbol_name,
         )
     if value_kind == "number":
         return CompiledInput(
@@ -1809,6 +1878,9 @@ def _compile_declared_input(rule: "RuleDecl") -> CompiledInput:
             default=default,
             js_type="number",
             python_type="float",
+            public_name=public_name,
+            module_identity=rule.module_identity,
+            symbol_name=symbol_name,
         )
     raise CompilationError(
         f"Rule '{rule.name}' declares unsupported input dtype "
@@ -2429,11 +2501,30 @@ def _infer_input(name: str) -> CompiledInput:
     """Infer a simple public input shape from a free formula reference."""
     if name.startswith(_BOOLEAN_PREFIXES):
         return CompiledInput(
-            name=name, default=False, js_type="boolean", python_type="bool"
+            name=name,
+            default=False,
+            js_type="boolean",
+            python_type="bool",
+            public_name=name,
+            symbol_name=name,
         )
     if name.startswith(_INTEGER_PREFIXES) or name.endswith(_INTEGER_SUFFIXES):
-        return CompiledInput(name=name, default=0, js_type="number", python_type="int")
-    return CompiledInput(name=name, default=0, js_type="number", python_type="float")
+        return CompiledInput(
+            name=name,
+            default=0,
+            js_type="number",
+            python_type="int",
+            public_name=name,
+            symbol_name=name,
+        )
+    return CompiledInput(
+        name=name,
+        default=0,
+        js_type="number",
+        python_type="float",
+        public_name=name,
+        symbol_name=name,
+    )
 
 
 def _append_unique(names: list[str], value: str) -> None:
