@@ -678,10 +678,10 @@ class LoweredProgram:
         return generator
 
 
-@dataclass
 # --- Phase 2: Compile model (CompiledVariable, CompiledModule) ---
 
 
+@dataclass
 class CompiledVariable:
     """A target-neutral compiled variable."""
 
@@ -1204,10 +1204,10 @@ def _normalize_local_value_kinds(
     return normalized
 
 
-@dataclass(frozen=True)
 # --- Phase 5: Resolve bindings + infer kinds ---
 
 
+@dataclass(frozen=True)
 class _StatementKindAnalysis:
     """Shared value-kind analysis for one validated statement block."""
 
