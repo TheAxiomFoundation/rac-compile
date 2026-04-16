@@ -1,4 +1,62 @@
-"""Shared compile model for generic RAC compilation."""
+"""Shared compile model for generic RAC compilation.
+
+This module is the backend-neutral middle of the compiler. It takes the parsed
+``RacProgram`` graph (produced by :mod:`rac_compile.program`) and produces a
+``LoweredProgram`` that the JavaScript, Python, and Rust generators (and the
+batch executor) can consume. It is intentionally large because it owns every
+step that is not parsing and not target-specific emission.
+
+At ~2.5k LOC this file is overdue for a split along the phase boundaries
+described below, but splitting it is an architectural change that needs to
+preserve the exact shape of ``LoweredProgram`` and the current
+``CompiledModule`` public surface. Until that split lands, the sections below
+are marked with ``# --- Phase X: name ---`` comments so contributors can
+navigate the logical layers.
+
+Logical phases (in roughly the order the code executes):
+
+1. **Parse / IR types** -- classes describing the compile-time (``Compiled*``)
+   and serializable lowered (``Lowered*``) shapes: ``CompilationError``,
+   ``CompileContext``, ``CompiledInput``, ``CompiledParameter``,
+   ``FormulaAssignment``, ``CompiledOutput``, ``LoweredInput``,
+   ``LoweredParameter``, ``LoweredComputation``, ``LoweredOutput``,
+   ``LoweredProgram`` (top of file through ``LoweredProgram``).
+2. **Compile model** -- ``CompiledVariable`` and ``CompiledModule``, the main
+   per-module compile entry point that orchestrates phases 3--6 against a
+   single ``RacFile`` (``CompiledVariable`` through the end of
+   ``CompiledModule``).
+3. **Render helpers** -- target-specific formula rendering wrappers
+   (``_render_js_formula``, ``_render_python_formula``).
+4. **Resolve temporal + lower inputs** -- lowering ``CompiledInput`` to
+   ``LoweredInput`` and inferring value kinds from names/defaults
+   (``_lower_input``, ``_input_value_kind``, the legacy kind inference
+   helpers, ``_normalize_value_kind``, and the parameter value/lookup-kind
+   helpers).
+5. **Resolve bindings + infer kinds** -- statement-level kind analysis
+   (``_StatementKindAnalysis``, ``_build_variable_kind_hints``,
+   ``_analyze_statement_kinds``, ``_infer_expression_value_kind``,
+   ``_combine_value_kinds``). This is where declared kinds, inferred kinds,
+   and bound external-rule kinds are reconciled.
+6. **Lower / emit** -- ``LoweredProgram`` (de)serialization helpers
+   (``_statement_to_dict`` / ``_from_dict``, ``_expression_to_dict`` /
+   ``_from_dict``, ``_require_*`` payload validators). These bridge the
+   in-memory compile model to the on-disk/IPC lowered form.
+7. **Compile driver helpers** -- actually producing ``CompiledInput`` /
+   ``CompiledParameter`` / ``CompiledVariable`` from the parsed AST:
+   ``_compile_reachable_variables``, ``_build_declared_inputs``,
+   ``_compile_declared_input``, ``_compile_parameter``,
+   ``_compile_variable``, ``_resolve_variable_formula``,
+   ``_resolve_temporal_entry``, ``_parse_formula_block``.
+8. **Statement resolution + ordering** -- reference binding, dependency
+   analysis, and topological ordering of variables
+   (``_bind_statement_references``, ``_analyze_statement_dependencies``,
+   ``_order_variables``, ``_infer_input``, ``_append_unique``,
+   ``_ordered_unique``).
+9. **External rule binding** -- resolving source-only external rules via the
+   ``RuleResolver`` on ``CompileContext``
+   (``_resolve_external_rule_binding``, ``_bound_external_rule_source``,
+   ``_external_rule_binding_target``).
+"""
 
 from __future__ import annotations
 
@@ -41,6 +99,9 @@ from .rust_generator import RustCodeGenerator
 
 if TYPE_CHECKING:
     from .parser import RacFile, RuleDecl, VariableBlock
+
+
+# --- Phase 1: Parse / IR types ---
 
 
 class CompilationError(ValueError):
@@ -618,6 +679,9 @@ class LoweredProgram:
 
 
 @dataclass
+# --- Phase 2: Compile model (CompiledVariable, CompiledModule) ---
+
+
 class CompiledVariable:
     """A target-neutral compiled variable."""
 
@@ -922,6 +986,9 @@ class CompiledModule:
         return self.to_lowered_program().to_rust_generator(module_name=module_name)
 
 
+# --- Phase 3: Render helpers ---
+
+
 def _render_js_formula(
     statements: tuple[Statement, ...],
     local_names: list[str] | tuple[str, ...],
@@ -964,6 +1031,9 @@ def _render_python_formula(
             parameter_names,
         )
     return "\n".join(render_statement_block_python(statements, parameter_names))
+
+
+# --- Phase 4: Resolve temporal + lower inputs ---
 
 
 def _lower_input(compiled_input: CompiledInput) -> LoweredInput:
@@ -1142,6 +1212,9 @@ def _normalize_local_value_kinds(
 
 
 @dataclass(frozen=True)
+# --- Phase 5: Resolve bindings + infer kinds ---
+
+
 class _StatementKindAnalysis:
     """Shared value-kind analysis for one validated statement block."""
 
@@ -1520,6 +1593,9 @@ def _combine_value_kinds(kinds: list[str], fallback: str) -> str:
     return fallback
 
 
+# --- Phase 6: Lower / emit (LoweredProgram serialization) ---
+
+
 def _statement_to_dict(statement: Statement) -> dict[str, Any]:
     """Serialize one statement node."""
     if isinstance(statement, AssignStmt):
@@ -1758,6 +1834,9 @@ def _require_list(value: Any, subject: str) -> list[Any]:
     if not isinstance(value, list):
         raise CompilationError(f"{subject} must be a list.")
     return value
+
+
+# --- Phase 7: Compile driver helpers ---
 
 
 def _compile_reachable_variables(
@@ -2353,6 +2432,9 @@ def _parse_formula_block(
         raise CompilationError(str(exc)) from exc
 
 
+# --- Phase 8: Statement resolution + ordering ---
+
+
 def _bind_statement_references(
     variable_name: str,
     statements: tuple[Statement, ...],
@@ -2539,6 +2621,9 @@ def _ordered_unique(values: Any) -> list[str]:
     for value in values:
         _append_unique(ordered, value)
     return ordered
+
+
+# --- Phase 9: External rule binding ---
 
 
 def _resolve_external_rule_binding(

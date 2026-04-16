@@ -826,8 +826,9 @@ def _render_expression_rust(
     if isinstance(expression, LiteralExpr):
         if isinstance(expression.value, str):
             raise _compilation_error(
-                "Rust backend currently supports only numeric and boolean "
-                "formula literals."
+                "Rust backend does not support string formula literals; use "
+                "the Python or JavaScript backend. Encountered literal: "
+                f"{expression.value!r}."
             )
         if isinstance(expression.value, bool):
             rendered = "true" if expression.value else "false"
@@ -1000,8 +1001,9 @@ def _render_expression_rust(
     if isinstance(expression, BinaryExpr):
         if natural_kind == "string":
             raise _compilation_error(
-                "Rust backend currently supports only numeric and boolean "
-                "formula literals."
+                "Rust backend does not support string formula literals; use "
+                "the Python or JavaScript backend. Encountered string-valued "
+                f"binary expression with operator {expression.operator!r}."
             )
         operand_kind = "number" if expression.operator in {"/", "**"} else natural_kind
         left = _render_expression_rust(

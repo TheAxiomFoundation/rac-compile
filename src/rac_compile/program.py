@@ -325,19 +325,31 @@ def _build_module_identities(files: list[RacFile], entrypoint: Path) -> dict[Pat
         existing = seen_by_identity.get(module_identity)
         if existing is not None and existing != origin:
             raise CompilationError(
-                "Loaded program contains more than one RAC file with leaf identity "
-                f"'{module_identity}': '{existing}' and '{origin}'. Rename one "
-                "module so rule identities stay unique."
+                "Module identity collision: two RAC files resolve to the same "
+                f"module identity '{module_identity}'.\n"
+                f"  - first file:  {existing}\n"
+                f"  - second file: {origin}\n"
+                "Module identities must be unique within one loaded program "
+                "because they key into imports, bindings, lowered metadata, and "
+                "citations. To resolve, rename one of the files (for canonical "
+                "RAC trees) or move one into a distinct subsection leaf so the "
+                "leaf-derived identity differs."
             )
         seen_by_identity[module_identity] = origin
         module_key = _module_key(module_identity)
         existing_key = seen_by_key.get(module_key)
         if existing_key is not None and existing_key[1] != origin:
             raise CompilationError(
-                "Loaded program contains module identities that normalize to the "
-                f"same internal prefix '{module_key}': '{existing_key[0]}' and "
-                f"'{module_identity}'. Rename one module to avoid an internal "
-                "symbol collision."
+                "Module identity collision after normalization: two distinct "
+                "module identities collapse to the same internal symbol prefix "
+                f"'{module_key}'.\n"
+                f"  - identity: '{existing_key[0]}' (file: {existing_key[1]})\n"
+                f"  - identity: '{module_identity}' (file: {origin})\n"
+                "Identities are normalized by replacing non-word characters "
+                "with underscores to form internal symbol prefixes. To resolve, "
+                "rename one of the modules so the two identities differ after "
+                "normalization (e.g. change a character that only differs by "
+                "punctuation or separator)."
             )
         seen_by_key[module_key] = (module_identity, origin)
         identities[origin] = module_identity

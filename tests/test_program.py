@@ -652,8 +652,64 @@ tax:
 """
         )
 
-        with pytest.raises(CompilationError, match="leaf identity 'shared'"):
+        with pytest.raises(CompilationError) as exc_info:
             load_rac_program(entry).to_compile_model()
+        message = str(exc_info.value)
+        assert "Module identity collision" in message
+        assert "'shared'" in message
+        assert str(left / "shared.rac") in message
+        assert str(right / "shared.rac") in message
+        assert "rename" in message.lower()
+
+    def test_load_rac_program_rejects_normalized_module_identity_collision(
+        self, tmp_path
+    ):
+        """Fail loudly when two distinct identities normalize to the same prefix."""
+        statute_dir = tmp_path / "statute" / "us"
+        statute_dir.mkdir(parents=True)
+        (statute_dir / "bar-baz.rac").write_text(
+            """
+rate_a:
+  source: "rate-a"
+  from 2024-01-01: 0.1
+"""
+        )
+        (statute_dir / "bar_baz.rac").write_text(
+            """
+rate_b:
+  source: "rate-b"
+  from 2024-01-01: 0.2
+"""
+        )
+        entry = tmp_path / "statute" / "us" / "entry.rac"
+        entry.write_text(
+            """
+import "./bar-baz.rac"
+import "./bar_baz.rac"
+
+tax:
+  entity: Person
+  period: Year
+  dtype: Money
+  from 2024-01-01:
+    return wages
+"""
+        )
+
+        with pytest.raises(CompilationError) as exc_info:
+            load_rac_program(entry).to_compile_model()
+        message = str(exc_info.value)
+        assert "Module identity collision after normalization" in message
+        # Both distinct identities should be called out.
+        assert "bar-baz" in message
+        assert "bar_baz" in message
+        # Both file paths should be included as well.
+        assert str(statute_dir / "bar-baz.rac") in message
+        assert str(statute_dir / "bar_baz.rac") in message
+        # The internal symbol prefix that collided should be shown.
+        assert "statute_us_bar_baz" in message
+        # The remediation suggestion should be present.
+        assert "rename" in message.lower()
 
     def test_load_rac_program_lowered_bundle_preserves_module_identity(self, tmp_path):
         """Lowered program metadata keeps leaf-derived rule identity per node."""
