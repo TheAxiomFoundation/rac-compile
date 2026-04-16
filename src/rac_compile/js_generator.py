@@ -343,9 +343,8 @@ class JSCodeGenerator:
         if self._is_return_statement_js(first):
             return True
         return (
-            (first.startswith("if ") or first.startswith("if("))
-            and self._if_chain_guarantees_return_js(lines, start, end)
-        )
+            first.startswith("if ") or first.startswith("if(")
+        ) and self._if_chain_guarantees_return_js(lines, start, end)
 
     def _if_chain_guarantees_return_js(
         self,

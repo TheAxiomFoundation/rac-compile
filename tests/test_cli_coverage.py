@@ -1050,7 +1050,7 @@ tax:
 
     def test_compile_malformed_rac_toml_exits_1(self, tmp_path):
         """Malformed rac.toml config still surfaces as a normal CLI error."""
-        (tmp_path / "rac.toml").write_text("[module_resolution\nroots = [\"./lib\"]\n")
+        (tmp_path / "rac.toml").write_text('[module_resolution\nroots = ["./lib"]\n')
         input_file = tmp_path / "main.rac"
         input_file.write_text(
             """

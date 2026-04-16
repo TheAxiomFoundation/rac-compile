@@ -769,9 +769,7 @@ class CompiledModule:
         )
         if duplicate_names:
             names = ", ".join(duplicate_names)
-            raise CompilationError(
-                f"Rules cannot share the same name: {names}."
-            )
+            raise CompilationError(f"Rules cannot share the same name: {names}.")
 
         source_citation = rac_file.source.citation if rac_file.source else ""
         if selected_outputs is None:
@@ -1078,9 +1076,7 @@ def _normalize_value_kind(
 ) -> str:
     """Validate one lowered value kind."""
     if value_kind not in allowed:
-        raise CompilationError(
-            f"{subject} has unsupported value kind '{value_kind}'."
-        )
+        raise CompilationError(f"{subject} has unsupported value kind '{value_kind}'.")
     return value_kind
 
 
@@ -1102,8 +1098,7 @@ def _normalize_parameter_lookup_kind(raw_lookup_kind: Any, *, name: str) -> str:
     """Validate one lowered parameter lookup contract."""
     if not isinstance(raw_lookup_kind, str):
         raise CompilationError(
-            f"Lowered parameter '{name}' has invalid lookup_kind "
-            f"{raw_lookup_kind!r}."
+            f"Lowered parameter '{name}' has invalid lookup_kind {raw_lookup_kind!r}."
         )
     if raw_lookup_kind not in _LOWERED_PARAMETER_LOOKUP_KINDS:
         raise CompilationError(
@@ -1197,9 +1192,7 @@ def _normalize_local_value_kinds(
             )
         normalized[local_name] = _normalize_value_kind(
             raw_kind,
-            subject=(
-                f"Lowered computation '{computation_name}' local '{local_name}'"
-            ),
+            subject=(f"Lowered computation '{computation_name}' local '{local_name}'"),
         )
     missing = sorted(allowed_names - set(normalized))
     if missing:
@@ -1896,10 +1889,7 @@ def _build_declared_inputs(
     rules: list["RuleDecl"],
 ) -> dict[str, CompiledInput]:
     """Collect typed declared-input rules from parsed variable blocks."""
-    return {
-        rule.name: _compile_declared_input(rule)
-        for rule in rules
-    }
+    return {rule.name: _compile_declared_input(rule) for rule in rules}
 
 
 def _input_public_name(rule: "RuleDecl") -> str:

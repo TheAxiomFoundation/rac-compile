@@ -276,9 +276,7 @@ class RacFile:
             ]
             if unknown:
                 names = ", ".join(unknown)
-                raise CompilationError(
-                    f"Unknown exported output variable(s): {names}."
-                )
+                raise CompilationError(f"Unknown exported output variable(s): {names}.")
             return [
                 exported_bindings[public_name] for public_name in requested_public
             ], [
@@ -403,9 +401,7 @@ class RacFile:
             self,
             compile_context=CompileContext(
                 effective_date=_normalize_effective_date(effective_date),
-                external_rule_resolver=self.resolve_rule_bindings(
-                    merged_rule_bindings
-                ),
+                external_rule_resolver=self.resolve_rule_bindings(merged_rule_bindings),
             ),
             selected_outputs=selected_outputs,
         ).with_public_outputs(public_output_bindings)
@@ -482,9 +478,7 @@ class RacFile:
 _IMPORT_PATTERN = re.compile(
     r'^import\s+["\']([^"\']+)["\'](?:\s+as\s+([A-Za-z_]\w*))?\s*$'
 )
-_SELECTIVE_IMPORT_PATTERN = re.compile(
-    r'^from\s+["\']([^"\']+)["\']\s+import\s+(.+)$'
-)
+_SELECTIVE_IMPORT_PATTERN = re.compile(r'^from\s+["\']([^"\']+)["\']\s+import\s+(.+)$')
 _RE_EXPORT_PATTERN = re.compile(
     r'^export\s+from\s+["\']([^"\']+)["\']\s+import\s+(.+)$'
 )
@@ -559,9 +553,7 @@ def parse_rac(content: str, origin: Path | str | None = None) -> RacFile:
             import_path = import_match.group(1)
             import_alias = import_match.group(2)
             result.imports.append(import_path)
-            result.import_specs.append(
-                ImportSpec(path=import_path, alias=import_alias)
-            )
+            result.import_specs.append(ImportSpec(path=import_path, alias=import_alias))
             i += 1
             continue
 
@@ -676,10 +668,7 @@ def _resolve_rule_binding_name(
         return candidates[0]
     if len(candidates) > 1:
         qualified = ", ".join(
-            sorted(
-                available_targets[name].display_name
-                for name in candidates
-            )
+            sorted(available_targets[name].display_name for name in candidates)
         )
         raise RuleBindingError(
             f"Rule binding target '{requested_name}' is ambiguous across "
@@ -968,9 +957,7 @@ def _parse_source_block(content: str) -> SourceBlock:
     return source
 
 
-def _parse_source_definition(
-    lines: list[str], start: int
-) -> tuple[int, SourceBlock]:
+def _parse_source_definition(lines: list[str], start: int) -> tuple[int, SourceBlock]:
     """Parse a top-level `source:` block."""
     i, block = _collect_indented_block(lines, start)
     if not block:
@@ -1048,9 +1035,7 @@ def _parse_variable_imports_block(
         specs.append(
             ImportSpec(
                 path=match.group(1),
-                symbols=(
-                    ImportSymbolSpec(name=match.group(2), alias=match.group(3)),
-                ),
+                symbols=(ImportSymbolSpec(name=match.group(2), alias=match.group(3)),),
             )
         )
 

@@ -227,8 +227,10 @@ class RacProgram:
         ]
         if unknown:
             names = ", ".join(unknown)
-            subject = "exported output variable(s)" if explicit_public_surface else (
-                "output variable(s)"
+            subject = (
+                "exported output variable(s)"
+                if explicit_public_surface
+                else ("output variable(s)")
             )
             raise CompilationError(f"Unknown {subject}: {names}.")
         return [
@@ -305,9 +307,7 @@ def load_rac_program(
 def _validate_rac_path(path: Path, *, subject: str) -> None:
     """Require program files to use the current `.rac` extension."""
     if path.suffix != ".rac":
-        raise CompilationError(
-            f"{subject} '{path}' must use the .rac extension."
-        )
+        raise CompilationError(f"{subject} '{path}' must use the .rac extension.")
 
 
 def _build_module_identities(files: list[RacFile], entrypoint: Path) -> dict[Path, str]:

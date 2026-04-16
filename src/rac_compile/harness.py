@@ -226,8 +226,7 @@ tax:
         name="branching_batch_execution",
         category="control_flow",
         description=(
-            "Batch execution handles branch-local assignments and skips dead "
-            "branches."
+            "Batch execution handles branch-local assignments and skips dead branches."
         ),
         rac="""
 threshold:
@@ -616,9 +615,7 @@ tax:
         ),
         workspace_entrypoint="rac-us/statute/26/21/a/2/A.rac",
         outputs=["first_reduction"],
-        expected_output_module_identities={
-            "first_reduction": "statute/26/21/a/2/A"
-        },
+        expected_output_module_identities={"first_reduction": "statute/26/21/a/2/A"},
         targets=(),
         live=True,
     ),
@@ -636,9 +633,7 @@ tax:
             "eitc_denied_for_excess_investment_income",
             "meets_full_taxable_year_requirement",
         ],
-        expected_output_module_identities={
-            "earned_income_credit": "statute/26/32/32"
-        },
+        expected_output_module_identities={"earned_income_credit": "statute/26/32/32"},
         targets=(),
         live=True,
     ),
@@ -1128,9 +1123,7 @@ def _load_case_program(case: HarnessCase):
     if case.workspace_entrypoint is not None:
         path = _WORKSPACE_ROOT / case.workspace_entrypoint
         if not path.exists():
-            raise ImportError(
-                f"Workspace harness case '{case.name}' requires {path}."
-            )
+            raise ImportError(f"Workspace harness case '{case.name}' requires {path}.")
         return load_rac_program(path)
 
     if not case.supporting_files:
@@ -1162,9 +1155,7 @@ def _load_case_rule_bindings(case: HarnessCase) -> Any:
     for relative_path in case.workspace_binding_files:
         path = _WORKSPACE_ROOT / relative_path
         if not path.exists():
-            raise ImportError(
-                f"Workspace harness case '{case.name}' requires {path}."
-            )
+            raise ImportError(f"Workspace harness case '{case.name}' requires {path}.")
         bundles.append(load_rule_bindings_file(path))
     if not bundles:
         return {}
@@ -1278,9 +1269,7 @@ def _check_lowered_program(
                     f"{actual_identity!r}, expected {expected_identity!r}."
                 )
 
-    computation_names = {
-        computation["name"] for computation in payload["computations"]
-    }
+    computation_names = {computation["name"] for computation in payload["computations"]}
     for output in payload["outputs"]:
         variable_name = output["variable_name"]
         if variable_name not in computation_names:
@@ -1293,8 +1282,7 @@ def _check_lowered_program(
     for parameter in payload["parameters"]:
         if "value_kind" not in parameter:
             return (
-                "Lowered bundle parameter "
-                f"'{parameter['name']}' is missing value_kind."
+                f"Lowered bundle parameter '{parameter['name']}' is missing value_kind."
             )
         if "lookup_kind" not in parameter:
             return (
@@ -1451,9 +1439,7 @@ def _check_runtime_result(
         tolerance = (output_tolerances or {}).get(name)
         if tolerance is None:
             if actual != expected:
-                return (
-                    f"Expected {target} output {name}={expected!r}, got {actual!r}."
-                )
+                return f"Expected {target} output {name}={expected!r}, got {actual!r}."
             continue
         if not _within_tolerance(actual, expected, tolerance):
             return (
@@ -1463,10 +1449,7 @@ def _check_runtime_result(
     extra_names = set(result) - set(expected_outputs) - {"citations"}
     if extra_names:
         names = ", ".join(sorted(extra_names))
-        return (
-            "Expected only requested outputs, but got extra values: "
-            f"{names}."
-        )
+        return f"Expected only requested outputs, but got extra values: {names}."
     return None
 
 
@@ -1633,10 +1616,7 @@ def _format_rust_public_input_binding(
         rendered = f"RacValue::Integer({literal})"
     else:
         rendered = f"RacValue::Number({literal})"
-    return (
-        "    public_inputs.insert("
-        f"{json.dumps(name)}.to_string(), {rendered});"
-    )
+    return f"    public_inputs.insert({json.dumps(name)}.to_string(), {rendered});"
 
 
 def _parse_rust_runtime_value(raw_value: str) -> Any | None:

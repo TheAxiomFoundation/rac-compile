@@ -308,8 +308,7 @@ def _evaluate_expression(
         if expression.operator == "-":
             return -operand
         raise CompilationError(
-            f"Batch execution does not support unary operator "
-            f"'{expression.operator}'."
+            f"Batch execution does not support unary operator '{expression.operator}'."
         )
 
     if isinstance(expression, BinaryExpr):
@@ -470,8 +469,7 @@ def _evaluate_boolean_expression(
         return result
 
     raise CompilationError(
-        f"Batch execution does not support boolean operator "
-        f"'{expression.operator}'."
+        f"Batch execution does not support boolean operator '{expression.operator}'."
     )
 
 

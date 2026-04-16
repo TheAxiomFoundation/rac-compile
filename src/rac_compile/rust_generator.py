@@ -142,8 +142,7 @@ class RustCodeGenerator:
         """Add an input variable."""
         if value_kind not in {"boolean", "integer", "number"}:
             raise _compilation_error(
-                f"Rust backend does not support input kind '{value_kind}' for "
-                f"'{name}'."
+                f"Rust backend does not support input kind '{value_kind}' for '{name}'."
             )
         self.inputs[name] = {
             "default": default,
@@ -380,8 +379,7 @@ class RustCodeGenerator:
             lines.append(
                 "        _ => panic!("
                 + _rust_string_literal(
-                    f"Unknown parameter index for '{parameter.name}': "
-                    + "{}"
+                    f"Unknown parameter index for '{parameter.name}': " + "{}"
                 )
                 + ", index),"
             )
@@ -462,7 +460,7 @@ class RustCodeGenerator:
             if parameter.source:
                 lines.append(
                     "            Citation { "
-                    f"kind: \"param\", name: {_rust_string_literal(parameter.name)}, "
+                    f'kind: "param", name: {_rust_string_literal(parameter.name)}, '
                     "module_identity: "
                     f"{_rust_string_literal(parameter.module_identity)}, "
                     f"source: {_rust_string_literal(parameter.source)} "
@@ -472,7 +470,7 @@ class RustCodeGenerator:
             if variable.citation:
                 lines.append(
                     "            Citation { "
-                    f"kind: \"variable\", name: {_rust_string_literal(output.name)}, "
+                    f'kind: "variable", name: {_rust_string_literal(output.name)}, '
                     "module_identity: "
                     f"{_rust_string_literal(variable.module_identity)}, "
                     f"source: {_rust_string_literal(variable.citation)} "
@@ -565,9 +563,7 @@ def _render_variable_expression(
 ) -> str:
     """Render one computation as a Rust block expression."""
     label = _calculation_label(variable.name)
-    local_bindings = {
-        name: _local_slot_name(name) for name in variable.local_names
-    }
+    local_bindings = {name: _local_slot_name(name) for name in variable.local_names}
     parameter_functions = {
         name: _parameter_function_name(name) for name in variable.parameter_dependencies
     }
@@ -577,25 +573,22 @@ def _render_variable_expression(
             _require_local_value_kind(variable, local_name)
         )
         lines.append(
-            "    "
-            f"let mut {local_bindings[local_name]}: Option<"
-            f"{slot_type}"
-            "> = None;"
+            f"    let mut {local_bindings[local_name]}: Option<{slot_type}> = None;"
         )
     if variable.local_names:
         lines.append("")
     lines.extend(
-            _render_statement_block_rust(
-                variable.statements,
-                indent="    ",
-                label=label,
-                local_bindings=local_bindings,
-                local_value_kinds=variable.local_value_kinds,
-                input_value_kinds=input_value_kinds,
-                parameter_value_kinds=parameter_value_kinds,
-                variable_value_kinds=variable_value_kinds,
-                parameter_functions=parameter_functions,
-                computation_value_kind=variable.value_kind,
+        _render_statement_block_rust(
+            variable.statements,
+            indent="    ",
+            label=label,
+            local_bindings=local_bindings,
+            local_value_kinds=variable.local_value_kinds,
+            input_value_kinds=input_value_kinds,
+            parameter_value_kinds=parameter_value_kinds,
+            variable_value_kinds=variable_value_kinds,
+            parameter_functions=parameter_functions,
+            computation_value_kind=variable.value_kind,
         )
     )
     lines.append("}")
@@ -657,8 +650,7 @@ def _render_public_input_assignment_rust(
             f"{indent}}};",
         ]
     raise _compilation_error(
-        f"Rust backend does not support public input kind '{value_kind}' for "
-        f"'{name}'."
+        f"Rust backend does not support public input kind '{value_kind}' for '{name}'."
     )
 
 
@@ -849,11 +841,7 @@ def _render_expression_rust(
             message = _rust_string_literal(
                 f"Local {expression.name!r} was referenced before assignment."
             )
-            rendered = (
-                f'{slot}.clone().expect('
-                f"{message}"
-                ")"
-            )
+            rendered = f"{slot}.clone().expect({message})"
             source_kind = local_value_kinds[expression.name]
         elif expression.name in parameter_functions:
             rendered = f"{parameter_functions[expression.name]}(0)"

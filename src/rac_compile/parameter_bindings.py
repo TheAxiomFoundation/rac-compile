@@ -74,9 +74,7 @@ def load_parameter_overrides_file(path: Path | None) -> ParameterBundle:
     try:
         raw = json.loads(path.read_text())
     except FileNotFoundError as exc:
-        raise ParameterBindingError(
-            f"Parameter file '{path}' was not found."
-        ) from exc
+        raise ParameterBindingError(f"Parameter file '{path}' was not found.") from exc
     except json.JSONDecodeError as exc:
         raise ParameterBindingError(
             f"Parameter file '{path}' is not valid JSON: {exc.msg}."
@@ -153,9 +151,7 @@ def _looks_like_ambiguous_bundle(raw: dict[str, Any]) -> bool:
 
 def _looks_like_single_parameter_binding_payload(raw: dict[str, Any]) -> bool:
     """Return whether a dict looks like one binding payload, not a param map."""
-    return (
-        "value" in raw or "values" in raw
-    ) and _looks_like_binding_object(raw)
+    return ("value" in raw or "values" in raw) and _looks_like_binding_object(raw)
 
 
 def _looks_like_parameter_mapping(raw: dict[str, Any]) -> bool:
@@ -165,9 +161,7 @@ def _looks_like_parameter_mapping(raw: dict[str, Any]) -> bool:
 
 def _looks_like_numeric_index(value: Any) -> bool:
     """Return whether a key looks like a numeric parameter index."""
-    return isinstance(value, int) or (
-        isinstance(value, str) and value.isdigit()
-    )
+    return isinstance(value, int) or (isinstance(value, str) and value.isdigit())
 
 
 def _normalize_parameter_binding(name: str, raw: Any) -> ParameterBinding:

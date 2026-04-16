@@ -23,10 +23,14 @@ class TestRacProgram:
         )
 
         namespace = {}
-        code = load_rac_program(entry).to_python_generator(
-            parameter_overrides={"phase_in_rate.rate": 0.25},
-            outputs=["benefit_amount"],
-        ).generate()
+        code = (
+            load_rac_program(entry)
+            .to_python_generator(
+                parameter_overrides={"phase_in_rate.rate": 0.25},
+                outputs=["benefit_amount"],
+            )
+            .generate()
+        )
 
         exec(code, namespace)
 
@@ -129,18 +133,22 @@ snap_child_support_deduction:
 
         exec(code, namespace)
 
-        assert namespace["calculate"](
-            snap_child_support_payments_made=500,
-            snap_state_uses_child_support_deduction=True,
-        )["snap_child_support_deduction"] == 500
-        assert namespace["calculate"](
-            snap_child_support_payments_made=500,
-            snap_state_uses_child_support_deduction=False,
-        )["snap_child_support_deduction"] == 0
+        assert (
+            namespace["calculate"](
+                snap_child_support_payments_made=500,
+                snap_state_uses_child_support_deduction=True,
+            )["snap_child_support_deduction"]
+            == 500
+        )
+        assert (
+            namespace["calculate"](
+                snap_child_support_payments_made=500,
+                snap_state_uses_child_support_deduction=False,
+            )["snap_child_support_deduction"]
+            == 0
+        )
 
-    def test_load_rac_program_supports_chained_inline_rac_conditionals(
-        self, tmp_path
-    ):
+    def test_load_rac_program_supports_chained_inline_rac_conditionals(self, tmp_path):
         """Chained inline RAC conditionals collapse into one compiled expression."""
         entry = tmp_path / "need_standard.rac"
         entry.write_text(
@@ -167,15 +175,24 @@ need_standard:
 
         exec(code, namespace)
 
-        assert namespace["calculate"](number_of_children_in_assistance_unit=0)[
-            "need_standard"
-        ] == 0
-        assert namespace["calculate"](number_of_children_in_assistance_unit=2)[
-            "need_standard"
-        ] == 245
-        assert namespace["calculate"](number_of_children_in_assistance_unit=3)[
-            "need_standard"
-        ] == 999
+        assert (
+            namespace["calculate"](number_of_children_in_assistance_unit=0)[
+                "need_standard"
+            ]
+            == 0
+        )
+        assert (
+            namespace["calculate"](number_of_children_in_assistance_unit=2)[
+                "need_standard"
+            ]
+            == 245
+        )
+        assert (
+            namespace["calculate"](number_of_children_in_assistance_unit=3)[
+                "need_standard"
+            ]
+            == 999
+        )
 
     def test_load_rac_program_supports_multiline_expression_continuations(
         self, tmp_path
@@ -212,9 +229,7 @@ flag:
         assert namespace["calculate"](a=True, b=True)["flag"] is True
         assert namespace["calculate"](a=True, b=False)["flag"] is False
 
-    def test_load_rac_program_supports_inline_if_elif_else_statements(
-        self, tmp_path
-    ):
+    def test_load_rac_program_supports_inline_if_elif_else_statements(self, tmp_path):
         """Single-line `if` / `elif` / `else` branches normalize into real blocks."""
         entry = tmp_path / "phaseout_percentage.rac"
         entry.write_text(
@@ -253,15 +268,18 @@ phaseout_percentage:
 
         exec(code, namespace)
 
-        assert namespace["calculate"](qualifying_child_count=0)[
-            "phaseout_percentage"
-        ] == 0.0765
-        assert namespace["calculate"](qualifying_child_count=2)[
-            "phaseout_percentage"
-        ] == 0.2106
-        assert namespace["calculate"](qualifying_child_count=4)[
-            "phaseout_percentage"
-        ] == 0.2106
+        assert (
+            namespace["calculate"](qualifying_child_count=0)["phaseout_percentage"]
+            == 0.0765
+        )
+        assert (
+            namespace["calculate"](qualifying_child_count=2)["phaseout_percentage"]
+            == 0.2106
+        )
+        assert (
+            namespace["calculate"](qualifying_child_count=4)["phaseout_percentage"]
+            == 0.2106
+        )
 
     def test_load_rac_program_compiles_cross_file_dependencies(self, tmp_path):
         """Entry files can compile imported helper variables and parameters."""
@@ -340,9 +358,7 @@ first_reduction:
         ]
         assert lowered.outputs[0].module_identity == "statute/26/21/a/2/A"
 
-    def test_load_rac_program_resolves_root_qualified_top_level_imports(
-        self, tmp_path
-    ):
+    def test_load_rac_program_resolves_root_qualified_top_level_imports(self, tmp_path):
         """Top-level `imports:` blocks can target root-qualified citation paths."""
         dependency_root = tmp_path / "statute" / "crs" / "26-2-703"
         dependency_root.mkdir(parents=True)
@@ -414,21 +430,22 @@ participant_is_subject_to_sanction_for_noncompliance_with_individual_responsibil
             ),
             "statute/crs/26-2-703/12.contract_is_pursuant_to_section_26_2_708",
         }
-        assert (
-            "statute/crs/26-2-703/12.is_individual_responsibility_contract"
-            not in {
-                compiled_input.public_name or compiled_input.name
-                for compiled_input in lowered.inputs
-            }
-        )
+        assert "statute/crs/26-2-703/12.is_individual_responsibility_contract" not in {
+            compiled_input.public_name or compiled_input.name
+            for compiled_input in lowered.inputs
+        }
         assert lowered.outputs[0].module_identity == "statute/crs/26-2-711/1/a/I"
 
         namespace: dict[str, object] = {}
-        code = load_rac_program(entry).to_python_generator(
-            outputs=[
-                "participant_is_subject_to_sanction_for_noncompliance_with_individual_responsibility_contract"
-            ]
-        ).generate()
+        code = (
+            load_rac_program(entry)
+            .to_python_generator(
+                outputs=[
+                    "participant_is_subject_to_sanction_for_noncompliance_with_individual_responsibility_contract"
+                ]
+            )
+            .generate()
+        )
 
         exec(code, namespace)
 
@@ -439,20 +456,21 @@ participant_is_subject_to_sanction_for_noncompliance_with_individual_responsibil
                     "contract_is_entered_into_by_participant_and_county_department"
                 ): True,
                 (
-                    "statute/crs/26-2-703/12."
-                    "contract_is_pursuant_to_section_26_2_708"
+                    "statute/crs/26-2-703/12.contract_is_pursuant_to_section_26_2_708"
                 ): True,
                 (
-                    "participant_fails_to_comply_with_terms_and_conditions_of_"
-                    "contract"
+                    "participant_fails_to_comply_with_terms_and_conditions_of_contract"
                 ): True,
                 "good_cause_exists_as_determined_by_county": False,
             }
         )
 
-        assert result[
-            "participant_is_subject_to_sanction_for_noncompliance_with_individual_responsibility_contract"
-        ] is True
+        assert (
+            result[
+                "participant_is_subject_to_sanction_for_noncompliance_with_individual_responsibility_contract"
+            ]
+            is True
+        )
 
     def test_selected_outputs_prune_unreachable_imported_variables(self, tmp_path):
         """Graph pruning excludes unreachable imported variables before validation."""
@@ -615,9 +633,7 @@ tax:
 
         assert namespace["calculate"](wages=100)["tax"] == 30
 
-    def test_load_rac_program_rejects_duplicate_leaf_module_identities(
-        self, tmp_path
-    ):
+    def test_load_rac_program_rejects_duplicate_leaf_module_identities(self, tmp_path):
         """Programs fail loudly when two files share the same subsection leaf."""
         left = tmp_path / "left"
         right = tmp_path / "right"
@@ -833,17 +849,17 @@ tax:
         )
 
         namespace = {}
-        code = load_rac_program(entry).to_python_generator(
-            parameter_overrides={"shared.rate": 0.25}
-        ).generate()
+        code = (
+            load_rac_program(entry)
+            .to_python_generator(parameter_overrides={"shared.rate": 0.25})
+            .generate()
+        )
 
         exec(code, namespace)
 
         assert namespace["calculate"](wages=100)["tax"] == 25
 
-    def test_load_rac_program_rejects_ambiguous_bare_parameter_bindings(
-        self, tmp_path
-    ):
+    def test_load_rac_program_rejects_ambiguous_bare_parameter_bindings(self, tmp_path):
         """Bare source-only names fail when more than one module defines them."""
         (tmp_path / "left.rac").write_text(
             """
@@ -970,9 +986,11 @@ bonus:
         )
 
         namespace = {}
-        code = load_rac_program(entry).to_python_generator(
-            outputs=["benefit_amount"]
-        ).generate()
+        code = (
+            load_rac_program(entry)
+            .to_python_generator(outputs=["benefit_amount"])
+            .generate()
+        )
 
         exec(code, namespace)
 

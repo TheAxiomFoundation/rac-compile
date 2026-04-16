@@ -904,25 +904,37 @@ class TestRunRAC:
 
         results = run_rac(df, show_progress=False)
 
-        assert results.loc[0, "rac_eitc"] == calculate_eitc(
-            earned_income=15000,
-            agi=15000,
-            n_children=1,
-            is_joint=False,
-        ).eitc
-        assert results.loc[0, "rac_ctc"] == calculate_ctc(
-            n_qualifying_children=1,
-            agi=15000,
-            is_joint=False,
-        ).ctc
-        assert results.loc[0, "rac_actc"] == calculate_actc(
-            n_qualifying_children=1,
-            earned_income=15000,
-        ).actc
-        assert results.loc[0, "rac_snap"] == calculate_snap_benefit(
-            household_size=2,
-            gross_income=1250,
-        ).benefit
+        assert (
+            results.loc[0, "rac_eitc"]
+            == calculate_eitc(
+                earned_income=15000,
+                agi=15000,
+                n_children=1,
+                is_joint=False,
+            ).eitc
+        )
+        assert (
+            results.loc[0, "rac_ctc"]
+            == calculate_ctc(
+                n_qualifying_children=1,
+                agi=15000,
+                is_joint=False,
+            ).ctc
+        )
+        assert (
+            results.loc[0, "rac_actc"]
+            == calculate_actc(
+                n_qualifying_children=1,
+                earned_income=15000,
+            ).actc
+        )
+        assert (
+            results.loc[0, "rac_snap"]
+            == calculate_snap_benefit(
+                household_size=2,
+                gross_income=1250,
+            ).benefit
+        )
 
     def test_run_rac_with_progress(self):
         """run_rac with show_progress=True uses tqdm."""
@@ -984,8 +996,7 @@ class TestRunPolicyEngine:
             assert len(results) == 2
             assert results.loc[0, "pe_eitc"] == 500.0
             assert (
-                results.attrs["policyengine_execution_mode"]
-                == "policyengine_household"
+                results.attrs["policyengine_execution_mode"] == "policyengine_household"
             )
 
     @patch("src.rac_compile.validation.runners._run_single_pe_simulation")
@@ -1188,10 +1199,7 @@ class TestRunBoth:
         assert "pe_eitc" in result.columns
         assert len(result) == 2
         assert result.attrs["rac_execution_mode"] == "compiled_example"
-        assert (
-            result.attrs["policyengine_execution_mode"]
-            == "policyengine_household"
-        )
+        assert result.attrs["policyengine_execution_mode"] == "policyengine_household"
 
 
 class TestRunRACVectorized:

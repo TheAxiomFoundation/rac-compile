@@ -130,10 +130,7 @@ def _format_rust_public_input_binding(
         rendered = f"RacValue::Integer({literal})"
     else:
         rendered = f"RacValue::Number({literal})"
-    return (
-        "    public_inputs.insert("
-        f"\"{name}\".to_string(), {rendered});"
-    )
+    return f'    public_inputs.insert("{name}".to_string(), {rendered});'
 
 
 def _rustc_compile_command(rustc: str, source: Path, binary: Path) -> list[str]:
