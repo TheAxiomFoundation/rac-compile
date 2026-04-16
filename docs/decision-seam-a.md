@@ -34,12 +34,30 @@ Consequences of the ad-hoc state:
 - Harness wiring is not testable against a contract — it tests against
   whatever artifact shape a given fixture happens to use.
 
+## Name collision with existing concrete class
+
+Before proposing a protocol name, note that `rule_bindings.RuleResolver`
+already exists today as a concrete `@dataclass(frozen=True)` with a
+**different** signature from what this seam needs. That class is used at
+`isinstance(value, RuleResolver)` sites throughout the compiler — in
+`compile_model`, `harness`, `cli`, the test suite, and in
+`normalize_rule_bindings` / `merge_rule_bindings`. Adopting the name
+`RuleResolver` for a new `Protocol` would either (a) shadow the existing
+class and break every `isinstance` site, or (b) force a same-PR rename of the
+existing class before design sign-off.
+
+To keep this doc as a pure design proposal that does not require touching
+live code, the new contract is named **`RuleSource`** below. The existing
+`rule_bindings.RuleResolver` dataclass keeps its name and its current
+behavior; if and when this seam lands, we can revisit whether to rename it
+(e.g. to `StaticRuleResolver`) as a follow-up.
+
 ## Proposed unified resolver contract
 
-A minimal `RuleResolver` protocol that all sources conform to:
+A minimal `RuleSource` protocol that all sources conform to:
 
 ```python
-class RuleResolver(Protocol):
+class RuleSource(Protocol):
     def resolve(
         self,
         module_identity: ModuleIdentity,
@@ -60,11 +78,11 @@ authoring metadata.
 
 Adapters would wrap each current shape:
 
-- `DictResolver` — wraps the current Python override maps
-- `JsonBundleResolver` — wraps flat JSON artifacts, with an optional
+- `DictRuleSource` — wraps the current Python override maps
+- `JsonBundleRuleSource` — wraps flat JSON artifacts, with an optional
   side-channel for injected provenance
-- `YamlBundleResolver` — native mapping from the existing YAML schema
-- `CompositeResolver` — ordered fallback across resolvers (e.g. test
+- `YamlBundleRuleSource` — native mapping from the existing YAML schema
+- `CompositeRuleSource` — ordered fallback across sources (e.g. test
   overrides → checked-in YAML → Atlas service)
 
 `compile_model` would depend only on the protocol. Everything else becomes an
@@ -72,15 +90,21 @@ adapter.
 
 ## Migration path
 
-1. Land the protocol and the three local adapters. No behavior change: all
-   current call sites construct the appropriate adapter and pass it in.
+1. Land the `RuleSource` protocol and the three local adapters
+   (`DictRuleSource`, `JsonBundleRuleSource`, `YamlBundleRuleSource`). No
+   behavior change, and no rename of the existing
+   `rule_bindings.RuleResolver` dataclass: all current call sites construct
+   the appropriate adapter and pass it in alongside existing bindings.
 2. Route the harness and CLI through the adapters. Remove the direct raw-dict
    paths from `compile_model`.
-3. Add a `CompositeResolver` and wire the CLI `--bindings` flag to build one.
-4. Introduce an `AtlasResolver` (or equivalent) that talks to an external
+3. Add a `CompositeRuleSource` and wire the CLI `--bindings` flag to build
+   one.
+4. Introduce an `AtlasRuleSource` (or equivalent) that talks to an external
    source of truth, slotting in as the last adapter.
 5. Once Atlas is the primary source, downgrade local JSON/YAML overrides to
-   test-only scope.
+   test-only scope. At that point, consider renaming the legacy
+   `rule_bindings.RuleResolver` dataclass to `StaticRuleResolver` for
+   clarity, since the `RuleSource` protocol is the primary contract.
 
 ## Open questions
 
