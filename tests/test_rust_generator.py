@@ -130,10 +130,7 @@ def _format_rust_public_input_binding(
         rendered = f"RacValue::Integer({literal})"
     else:
         rendered = f"RacValue::Number({literal})"
-    return (
-        "    public_inputs.insert("
-        f"\"{name}\".to_string(), {rendered});"
-    )
+    return f'    public_inputs.insert("{name}".to_string(), {rendered});'
 
 
 def _rustc_compile_command(rustc: str, source: Path, binary: Path) -> list[str]:
@@ -362,8 +359,9 @@ name:
   from 2024-01-01:
     return "hello"
 """
-        with pytest.raises(
-            ValueError,
-            match="numeric and boolean formula literals",
-        ):
+        with pytest.raises(ValueError) as exc_info:
             parse_rac(rac).to_rust_generator().generate()
+        message = str(exc_info.value)
+        assert "Rust backend does not support string formula literals" in message
+        assert "Python or JavaScript backend" in message
+        assert "'hello'" in message

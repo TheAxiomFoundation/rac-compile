@@ -95,6 +95,34 @@ Current downstream consumers:
 - compiler harness
 - sample and full validation lanes
 
+## Rust Backend Limitations
+
+The Rust generator targets the current validated numeric/boolean subset. It is
+the strictest of the three generators and will refuse to lower constructs it
+cannot represent safely. Known gaps:
+
+- **No string formula literals.** Lowering fails with a clear `CompilationError`
+  when a `LiteralExpr` holds a string value or when a `BinaryExpr` has an
+  inferred `string` kind (e.g. string concatenation or comparison-as-string).
+  Use the Python or JavaScript backend for modules that need string-valued
+  formulas.
+- **Only the validated control-flow subset.** The Rust backend covers the same
+  statement set as the Python/JS backends for the validated modules, but has
+  not been exercised against the full language surface. Anything outside the
+  validated subset should be treated as unsupported until explicitly added.
+- **Scalar-or-indexed numeric external rules only.** The Rust generator assumes
+  external rule schemas resolve to numeric scalars or indexed numeric tables,
+  matching the current shared compile model.
+- **Prebuilt binaries emit JS/Python only.** The shipped `rac-compile eitc`
+  prebuilt invocation generates the JS and Python targets. The Rust target is
+  available through the library API and CLI flags, but is not part of the
+  default prebuilt output and may require the module to stay within the
+  numeric/boolean subset above.
+
+The rationale is intentional: the Rust path fails loudly outside its validated
+subset rather than silently emitting code with surprising semantics. Broadening
+the subset should be a deliberate decision (see Decision Seam E below).
+
 ## Stable vs In Progress
 
 ### Stable enough to build on
@@ -136,6 +164,9 @@ given `(module_identity, symbol, effective_date)`?
 Why it matters:
 The compiler can now point at the right rule identity, but it still needs a
 first-class resolver contract instead of raw override maps.
+
+See `docs/decision-seam-a.md` for a concrete draft of the proposed unified
+resolver contract and migration path.
 
 ### B. Rule identity policy
 

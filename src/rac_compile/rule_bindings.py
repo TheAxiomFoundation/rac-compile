@@ -38,9 +38,7 @@ class RuleBindingTarget:
             raise RuleBindingError("Rule binding target cannot be empty.")
         if "." not in stripped:
             if not re.fullmatch(r"[A-Za-z_]\w*", stripped):
-                raise RuleBindingError(
-                    f"Invalid rule binding target '{value}'."
-                )
+                raise RuleBindingError(f"Invalid rule binding target '{value}'.")
             return cls(symbol=stripped)
 
         module_identity, symbol = stripped.rsplit(".", 1)
@@ -233,9 +231,7 @@ def load_rule_bindings_file(path: Path | None) -> RuleBindingBundle:
     try:
         raw = _load_rule_binding_mapping(path)
     except FileNotFoundError as exc:
-        raise RuleBindingError(
-            f"Rule binding file '{path}' was not found."
-        ) from exc
+        raise RuleBindingError(f"Rule binding file '{path}' was not found.") from exc
     if not isinstance(raw, dict):
         raise RuleBindingError(
             f"Rule binding file '{path}' must contain an object at the top level."
@@ -544,8 +540,7 @@ def _artifact_value_payload(
     if "brackets" in payload:
         return payload["brackets"]
     raise RuleBindingError(
-        f"{source_label} entry '{name}' must include 'value', 'values', or "
-        "'brackets'."
+        f"{source_label} entry '{name}' must include 'value', 'values', or 'brackets'."
     )
 
 

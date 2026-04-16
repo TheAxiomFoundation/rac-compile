@@ -217,8 +217,7 @@ class PythonCodeGenerator:
             lines.append("    input_values.update(kwargs)")
             for name, info in self.inputs.items():
                 lines.append(
-                    f"    {name} = "
-                    f"{self._render_python_input_lookup(name, info)}"
+                    f"    {name} = {self._render_python_input_lookup(name, info)}"
                 )
             if self.inputs:
                 lines.append("")
@@ -242,9 +241,7 @@ class PythonCodeGenerator:
         # Return dictionary with citations
         lines.append("    return {")
         for output, _ in self._resolved_outputs():
-            lines.append(
-                f'        "{output.name}": {output.variable_name},'
-            )
+            lines.append(f'        "{output.name}": {output.variable_name},')
         lines.append('        "citations": [')
         for param in self.parameters.values():
             if param.source:

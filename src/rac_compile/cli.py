@@ -46,15 +46,11 @@ def _parse_rule_binding_name(name: str) -> str:
     if re.fullmatch(r"[A-Za-z_]\w*", name):
         return name
     if "." not in name:
-        raise argparse.ArgumentTypeError(
-            f"Invalid rule binding target '{name}'."
-        )
+        raise argparse.ArgumentTypeError(f"Invalid rule binding target '{name}'.")
 
     module_identity, symbol = name.rsplit(".", 1)
     if not module_identity or not re.fullmatch(r"[A-Za-z_]\w*", symbol):
-        raise argparse.ArgumentTypeError(
-            f"Invalid rule binding target '{name}'."
-        )
+        raise argparse.ArgumentTypeError(f"Invalid rule binding target '{name}'.")
     return name
 
 
@@ -302,8 +298,7 @@ def main():
         "--include-live",
         action="store_true",
         help=(
-            "Include curated compatibility checks against sibling live-stack "
-            "RAC files"
+            "Include curated compatibility checks against sibling live-stack RAC files"
         ),
     )
 

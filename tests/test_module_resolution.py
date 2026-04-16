@@ -42,7 +42,7 @@ roots = ["./lib"]
         )
         target = tmp_path / "lib" / "tax" / "shared.rac"
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("rate:\n  source: \"x\"\n  from 2024-01-01: 0.1\n")
+        target.write_text('rate:\n  source: "x"\n  from 2024-01-01: 0.1\n')
         entry = tmp_path / "main.rac"
         entry.write_text('from "tax/shared.rac" import rate\n')
 
@@ -57,7 +57,7 @@ roots = ["./lib"]
         for root in (first, second):
             target = root / "tax" / "shared.rac"
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text("rate:\n  source: \"x\"\n  from 2024-01-01: 0.1\n")
+            target.write_text('rate:\n  source: "x"\n  from 2024-01-01: 0.1\n')
         entry = tmp_path / "main.rac"
         entry.write_text('from "tax/shared.rac" import rate\n')
 
@@ -96,7 +96,7 @@ tax = "./packages/tax"
         )
         target = tmp_path / "packages" / "tax" / "shared.rac"
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("rate:\n  source: \"x\"\n  from 2024-01-01: 0.1\n")
+        target.write_text('rate:\n  source: "x"\n  from 2024-01-01: 0.1\n')
         entry = tmp_path / "main.rac"
         entry.write_text('from "tax/shared.rac" import rate\n')
 
@@ -115,9 +115,7 @@ tax = "./packages/tax"
         entry = tmp_path / "main.rac"
         entry.write_text('from "tax/shared.rac" import rate\n')
 
-        with pytest.raises(
-            ModuleResolutionError, match="configured more than once"
-        ):
+        with pytest.raises(ModuleResolutionError, match="configured more than once"):
             build_import_resolver(
                 entry,
                 module_packages={"tax": tmp_path / "other-tax"},

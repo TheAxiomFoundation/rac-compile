@@ -90,9 +90,7 @@ class TestParameterBindings:
         """Explicit schema bundles stay structured even with numeric parameter names."""
         file_path = tmp_path / "bindings.json"
         file_path.write_text(
-            json.dumps(
-                {"schema_version": 1, "metadata": {}, "parameters": {"0": 0.2}}
-            )
+            json.dumps({"schema_version": 1, "metadata": {}, "parameters": {"0": 0.2}})
         )
 
         loaded = load_parameter_overrides_file(file_path)
@@ -191,9 +189,7 @@ class TestParameterBindings:
             metadata={},
         )
 
-    def test_load_structured_bundle_allows_multiple_reserved_like_names(
-        self, tmp_path
-    ):
+    def test_load_structured_bundle_allows_multiple_reserved_like_names(self, tmp_path):
         """Structured bundles support multiple reserved-looking parameter names."""
         file_path = tmp_path / "bindings.json"
         file_path.write_text(

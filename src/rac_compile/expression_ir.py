@@ -225,8 +225,7 @@ def map_expression_names(
         return BoolExpr(
             operator=expression.operator,
             values=tuple(
-                map_expression_names(value, mapper)
-                for value in expression.values
+                map_expression_names(value, mapper) for value in expression.values
             ),
         )
     if isinstance(expression, CompareExpr):
@@ -348,9 +347,11 @@ def formula_has_branching(statements: tuple[Statement, ...]) -> bool:
 
 def is_straight_line_formula(statements: tuple[Statement, ...]) -> bool:
     """Return whether the formula is assignment-only plus a final return."""
-    return bool(statements) and all(
-        isinstance(statement, AssignStmt) for statement in statements[:-1]
-    ) and isinstance(statements[-1], ReturnStmt)
+    return (
+        bool(statements)
+        and all(isinstance(statement, AssignStmt) for statement in statements[:-1])
+        and isinstance(statements[-1], ReturnStmt)
+    )
 
 
 def _statement_from_python_ast(
@@ -436,9 +437,7 @@ def _sequence_from_python_ast(
     )
 
 
-def _from_python_ast(
-    node: ast.AST, original: str, variable_name: str
-) -> Expression:
+def _from_python_ast(node: ast.AST, original: str, variable_name: str) -> Expression:
     """Convert a validated Python AST node into expression IR."""
     if isinstance(node, ast.Constant):
         if isinstance(node.value, (bool, int, float, str)):
@@ -575,8 +574,7 @@ def _from_python_ast(
         return NameExpr(_attribute_to_name(node, original, variable_name))
 
     raise ExpressionParseError(
-        f"Variable '{variable_name}' uses unsupported expression syntax "
-        f"'{original}'."
+        f"Variable '{variable_name}' uses unsupported expression syntax '{original}'."
     )
 
 
@@ -642,7 +640,7 @@ def _render_if_js(
     if statement.orelse:
         if len(statement.orelse) == 1 and isinstance(statement.orelse[0], IfStmt):
             nested = _render_if_js(statement.orelse[0], parameter_names, indent)
-            first_nested = nested[0][len(indent):]
+            first_nested = nested[0][len(indent) :]
             lines.append(f"{indent}}} else {first_nested}")
             lines.extend(nested[1:])
         else:
@@ -766,8 +764,10 @@ def _render_with_precedence(
 
     if isinstance(expression, BoolExpr):
         precedence = 20 if expression.operator == "or" else 30
-        operator = " || " if target == "js" and expression.operator == "or" else (
-            " && " if target == "js" else f" {expression.operator} "
+        operator = (
+            " || "
+            if target == "js" and expression.operator == "or"
+            else (" && " if target == "js" else f" {expression.operator} ")
         )
         rendered = operator.join(
             _render_with_precedence(value, parameter_names, target, precedence + 1)
@@ -894,7 +894,7 @@ def _normalize_statement_line(line: str) -> str:
         return stripped
 
     if stripped.startswith("return "):
-        return f"return {_normalize_expression(stripped[len('return '):])}"
+        return f"return {_normalize_expression(stripped[len('return ') :])}"
 
     if stripped.endswith(":"):
         head, _, tail = stripped[:-1].partition(" ")
@@ -912,9 +912,7 @@ def _normalize_statement_line(line: str) -> str:
 def _normalize_expression(expression: str) -> str:
     """Convert RAC expression syntax into parseable Python syntax."""
     stripped = expression.strip()
-    return _rewrite_js_tokens(
-        _convert_ternary(_convert_inline_if_expression(stripped))
-    )
+    return _rewrite_js_tokens(_convert_ternary(_convert_inline_if_expression(stripped)))
 
 
 def _collapse_inline_if_formula_lines(lines: list[str]) -> list[str]:
@@ -1052,10 +1050,13 @@ def _is_inline_if_expression(expression: str) -> bool:
     condition_colon = _find_top_level_colon(stripped, start_index=len("if "))
     if condition_colon == -1:
         return False
-    return _find_top_level_else_marker(
-        stripped,
-        start_index=condition_colon + 1,
-    ) != -1
+    return (
+        _find_top_level_else_marker(
+            stripped,
+            start_index=condition_colon + 1,
+        )
+        != -1
+    )
 
 
 def _convert_inline_if_expression(expression: str) -> str:
@@ -1250,10 +1251,7 @@ def _find_top_level_else_marker(expression: str, start_index: int = 0) -> int:
             and expression.startswith("else:", index)
             and (
                 index == 0
-                or not (
-                    expression[index - 1].isalnum()
-                    or expression[index - 1] == "_"
-                )
+                or not (expression[index - 1].isalnum() or expression[index - 1] == "_")
             )
         ):
             return index

@@ -410,8 +410,9 @@ class TestFormulaConversion:
 
     def test_converts_min_to_math_min(self):
         """min() is converted to Math.min()."""
-        code = parse_rac(
-            """
+        code = (
+            parse_rac(
+                """
 x:
   entity: Person
   period: Year
@@ -419,14 +420,18 @@ x:
   from 2024-01-01:
     return min(a, b)
 """
-        ).to_js_generator().generate()
+            )
+            .to_js_generator()
+            .generate()
+        )
 
         assert "Math.min(a, b)" in code
 
     def test_converts_max_to_math_max(self):
         """max() is converted to Math.max()."""
-        code = parse_rac(
-            """
+        code = (
+            parse_rac(
+                """
 x:
   entity: Person
   period: Year
@@ -434,14 +439,18 @@ x:
   from 2024-01-01:
     return max(a, b)
 """
-        ).to_js_generator().generate()
+            )
+            .to_js_generator()
+            .generate()
+        )
 
         assert "Math.max(a, b)" in code
 
     def test_converts_round_to_math_round(self):
         """round() is converted to Math.round()."""
-        code = parse_rac(
-            """
+        code = (
+            parse_rac(
+                """
 x:
   entity: Person
   period: Year
@@ -449,14 +458,18 @@ x:
   from 2024-01-01:
     return round(income)
 """
-        ).to_js_generator().generate()
+            )
+            .to_js_generator()
+            .generate()
+        )
 
         assert "Math.round(income)" in code
 
     def test_converts_parameter_references(self):
         """Parameter references compile to PARAMS lookups."""
-        code = parse_rac(
-            """
+        code = (
+            parse_rac(
+                """
 rate:
   values:
     0: 20
@@ -468,14 +481,18 @@ x:
   from 2024-01-01:
     return rate[0] * income
 """
-        ).to_js_generator().generate()
+            )
+            .to_js_generator()
+            .generate()
+        )
 
         assert "PARAMS.rate[0]" in code
 
     def test_nested_math_functions(self):
         """Nested helper calls render correctly."""
-        code = parse_rac(
-            """
+        code = (
+            parse_rac(
+                """
 x:
   entity: Person
   period: Year
@@ -483,7 +500,10 @@ x:
   from 2024-01-01:
     return max(0, round(min(a, b)))
 """
-        ).to_js_generator().generate()
+            )
+            .to_js_generator()
+            .generate()
+        )
 
         assert "Math.max(0, Math.round(Math.min(a, b)))" in code
 
@@ -528,8 +548,9 @@ eitc:
 
     def test_rac_file_to_js_generator(self):
         """Parsed RAC files can generate JavaScript."""
-        code = parse_rac(
-            """
+        code = (
+            parse_rac(
+                """
 source:
   citation: "Test"
   accessed: 2025-01-01
@@ -545,7 +566,10 @@ tax:
   from 2025-01-01:
     return income * 0.2
 """
-        ).to_js_generator().generate()
+            )
+            .to_js_generator()
+            .generate()
+        )
 
         assert "function calculate(" in code
 
@@ -581,12 +605,16 @@ class TestExampleFiles:
     def test_eitc_example_compiles_to_valid_js(self):
         """examples/eitc.rac compiles to valid JS."""
         eitc_path = Path(__file__).parent.parent / "examples" / "eitc.rac"
-        self._assert_valid_js(parse_rac(eitc_path.read_text()).to_js_generator().generate())
+        self._assert_valid_js(
+            parse_rac(eitc_path.read_text()).to_js_generator().generate()
+        )
 
     def test_simple_tax_example_compiles(self):
         """examples/simple_tax.rac compiles to valid JS."""
         simple_path = Path(__file__).parent.parent / "examples" / "simple_tax.rac"
-        self._assert_valid_js(parse_rac(simple_path.read_text()).to_js_generator().generate())
+        self._assert_valid_js(
+            parse_rac(simple_path.read_text()).to_js_generator().generate()
+        )
 
     def test_ctc_example_parses(self):
         """examples/ctc.rac parses with indexed parameter values."""
@@ -602,7 +630,9 @@ class TestExampleFiles:
     def test_ctc_example_compiles_to_valid_js(self):
         """examples/ctc.rac compiles to valid JS."""
         ctc_path = Path(__file__).parent.parent / "examples" / "ctc.rac"
-        self._assert_valid_js(parse_rac(ctc_path.read_text()).to_js_generator().generate())
+        self._assert_valid_js(
+            parse_rac(ctc_path.read_text()).to_js_generator().generate()
+        )
 
     def test_snap_example_parses(self):
         """examples/snap.rac parses with indexed parameter tables."""
@@ -621,7 +651,9 @@ class TestExampleFiles:
     def test_snap_example_compiles_to_valid_js(self):
         """examples/snap.rac compiles to valid JS."""
         snap_path = Path(__file__).parent.parent / "examples" / "snap.rac"
-        self._assert_valid_js(parse_rac(snap_path.read_text()).to_js_generator().generate())
+        self._assert_valid_js(
+            parse_rac(snap_path.read_text()).to_js_generator().generate()
+        )
 
 
 class TestStatuteText:

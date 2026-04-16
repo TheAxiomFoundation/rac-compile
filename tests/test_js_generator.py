@@ -207,7 +207,7 @@ class TestGenerateOutput:
         script = "\n".join(
             [
                 code,
-                'console.log(JSON.stringify(calculate({ x: 10 })));',
+                "console.log(JSON.stringify(calculate({ x: 10 })));",
             ]
         )
         proc = subprocess.run(

@@ -339,7 +339,7 @@ flag:
                                         "kind": "name",
                                         "name": "count",
                                     },
-                                }
+                                },
                             ],
                             "local_names": ["count"],
                         }
@@ -416,9 +416,7 @@ flag:
                             "value_kind": "integer",
                         }
                     ],
-                    "parameters": [
-                        {"name": "allowances", "values": {"0": 1, "1": 2}}
-                    ],
+                    "parameters": [{"name": "allowances", "values": {"0": 1, "1": 2}}],
                     "computations": [
                         {
                             "name": "count",
@@ -584,14 +582,14 @@ flag:
                             {
                                 "name": "flag",
                                 "statements": [
-                                {
-                                    "kind": "assign",
-                                    "name": "tmp",
-                                    "expression": {
-                                        "kind": "literal",
-                                        "value": True,
+                                    {
+                                        "kind": "assign",
+                                        "name": "tmp",
+                                        "expression": {
+                                            "kind": "literal",
+                                            "value": True,
+                                        },
                                     },
-                                },
                                     {
                                         "kind": "return",
                                         "expression": {"kind": "name", "name": "tmp"},
@@ -732,9 +730,11 @@ tax:
     return wages * rate
 """
         namespace = {}
-        code = parse_rac(rac).to_python_generator(
-            parameter_overrides={"rate": 0.25}
-        ).generate()
+        code = (
+            parse_rac(rac)
+            .to_python_generator(parameter_overrides={"rate": 0.25})
+            .generate()
+        )
 
         exec(code, namespace)
 
@@ -755,9 +755,11 @@ tax:
     return wages * rate
 """
         namespace = {}
-        code = parse_rac(rac, origin=origin).to_python_generator(
-            parameter_overrides={"benefit_amount.rate": 0.25}
-        ).generate()
+        code = (
+            parse_rac(rac, origin=origin)
+            .to_python_generator(parameter_overrides={"benefit_amount.rate": 0.25})
+            .generate()
+        )
 
         exec(code, namespace)
 
@@ -777,23 +779,27 @@ tax:
     return wages * rate
 """
         namespace = {}
-        code = parse_rac(rac).to_python_generator(
-            effective_date=date(2025, 1, 1),
-            rule_bindings={
-                "bindings": [
-                    {
-                        "symbol": "rate",
-                        "effective_date": "2024-01-01",
-                        "value": 0.2,
-                    },
-                    {
-                        "symbol": "rate",
-                        "effective_date": "2025-01-01",
-                        "value": 0.3,
-                    },
-                ]
-            },
-        ).generate()
+        code = (
+            parse_rac(rac)
+            .to_python_generator(
+                effective_date=date(2025, 1, 1),
+                rule_bindings={
+                    "bindings": [
+                        {
+                            "symbol": "rate",
+                            "effective_date": "2024-01-01",
+                            "value": 0.2,
+                        },
+                        {
+                            "symbol": "rate",
+                            "effective_date": "2025-01-01",
+                            "value": 0.3,
+                        },
+                    ]
+                },
+            )
+            .generate()
+        )
 
         exec(code, namespace)
 
@@ -882,11 +888,15 @@ tax:
   from 2024-01-01:
     return wages * rate
 """
-        code = parse_rac(rac).to_python_generator(
-            parameter_overrides={
-                "rate": {"value": 0.25, "source": "bundle://ty2025"}
-            }
-        ).generate()
+        code = (
+            parse_rac(rac)
+            .to_python_generator(
+                parameter_overrides={
+                    "rate": {"value": 0.25, "source": "bundle://ty2025"}
+                }
+            )
+            .generate()
+        )
 
         assert "external/rate [bound from bundle://ty2025]" in code
 
@@ -933,27 +943,37 @@ tax:
     rate_index = has_bonus ? 1 : 0
     return !(wages <= threshold) && is_eligible ? round(wages * rates[rate_index]) : 0
 """
-        js_code = parse_rac(rac).to_js_generator(
-            parameter_overrides={"rates": [0.1, 0.2]}
-        ).generate()
+        js_code = (
+            parse_rac(rac)
+            .to_js_generator(parameter_overrides={"rates": [0.1, 0.2]})
+            .generate()
+        )
         namespace = {}
-        py_code = parse_rac(rac).to_python_generator(
-            parameter_overrides={"rates": [0.1, 0.2]}
-        ).generate()
+        py_code = (
+            parse_rac(rac)
+            .to_python_generator(parameter_overrides={"rates": [0.1, 0.2]})
+            .generate()
+        )
 
         exec(py_code, namespace)
 
         assert "PARAMS.rates[rate_index]" in js_code
-        assert namespace["calculate"](
-            wages=200,
-            has_bonus=True,
-            is_eligible=True,
-        )["tax"] == 40
-        assert namespace["calculate"](
-            wages=50,
-            has_bonus=True,
-            is_eligible=True,
-        )["tax"] == 0
+        assert (
+            namespace["calculate"](
+                wages=200,
+                has_bonus=True,
+                is_eligible=True,
+            )["tax"]
+            == 40
+        )
+        assert (
+            namespace["calculate"](
+                wages=50,
+                has_bonus=True,
+                is_eligible=True,
+            )["tax"]
+            == 0
+        )
 
     def test_simple_comparison_expression_compiles_to_python(self):
         """Direct comparison expressions stay scalar expressions in Python output."""
@@ -1254,9 +1274,9 @@ tax:
     return wages * rate
 """
         namespace = {}
-        code = parse_rac(rac).to_python_generator(
-            effective_date="2025-06-01"
-        ).generate()
+        code = (
+            parse_rac(rac).to_python_generator(effective_date="2025-06-01").generate()
+        )
 
         exec(code, namespace)
 
@@ -1275,9 +1295,9 @@ tax:
     return wages * 0.2
 """
         namespace = {}
-        code = parse_rac(rac).to_python_generator(
-            effective_date="2024-06-01"
-        ).generate()
+        code = (
+            parse_rac(rac).to_python_generator(effective_date="2024-06-01").generate()
+        )
 
         exec(code, namespace)
 
